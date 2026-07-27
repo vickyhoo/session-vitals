@@ -9,10 +9,12 @@ and possibly pasted credentials, so they never enter the repository. The countin
 only cares about fields and offsets, which synthetic data covers fine.
 """
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -285,6 +287,69 @@ class TestProjectDir(unittest.TestCase):
         got, why = vitals.resolve_project_dir("/nonexistent/nope")
         self.assertIsNone(got)
         self.assertIn("not a directory", why)
+
+
+# ── Hook output shape ───────────────────────────────────────────────────────
+
+class TestHookOutput(unittest.TestCase):
+    """
+    Each event accepts a different output shape, and getting it wrong fails loudly at
+    runtime ("Hook JSON output validation failed"). PostCompact in particular has no
+    decision control at all - its output never reaches the model - so the checkpoint
+    prompt has to ride on SessionStart with source=compact, which fires at the same
+    moment and does support context injection.
+    """
+
+    ENABLED = {"progress_md": {"enabled": True, "max_bytes": 100_000,
+                               "filename": "PROGRESS.md"}}
+
+    def run_hook(self, fn, payload, cfg=None):
+        original_cfg, original_notify = vitals.load_config, vitals.notify
+        buf = io.StringIO()
+        try:
+            if cfg is not None:
+                vitals.load_config = lambda: cfg
+            vitals.notify = lambda *a, **k: None   # no desktop popups during tests
+            with redirect_stdout(buf):
+                fn(payload)
+        finally:
+            vitals.load_config, vitals.notify = original_cfg, original_notify
+        text = buf.getvalue()
+        return json.loads(text) if text.strip() else None
+
+    def test_postcompact_stays_silent(self):
+        """Output would be discarded, and emitting the wrong shape is a hard error."""
+        self.assertIsNone(self.run_hook(vitals.hook_postcompact, {"session_id": "s1"},
+                                        self.ENABLED))
+
+    def test_compact_start_carries_the_checkpoint_prompt(self):
+        out = self.run_hook(vitals.hook_sessionstart,
+                            {"session_id": "s1", "source": "compact",
+                             "transcript_path": "/nonexistent.jsonl"}, self.ENABLED)
+        hso = out["hookSpecificOutput"]
+        self.assertEqual(hso["hookEventName"], "SessionStart")
+        self.assertIn("write-progress", hso["additionalContext"])
+
+    def test_other_sources_do_not(self):
+        for source in ("resume", "startup", "clear"):
+            self.assertIsNone(self.run_hook(
+                vitals.hook_sessionstart,
+                {"session_id": "s1", "source": source,
+                 "transcript_path": "/nonexistent.jsonl"}, self.ENABLED), source)
+
+    def test_disabled_config_suppresses_it(self):
+        self.assertIsNone(self.run_hook(
+            vitals.hook_sessionstart,
+            {"session_id": "s1", "source": "compact",
+             "transcript_path": "/nonexistent.jsonl"}, {"progress_md": {}}))
+
+    def test_precompact_sends_no_context(self):
+        """PreCompact cannot inject context, and it would be compacted away regardless."""
+        with Fx([compact("a"), compact("b"), compact("c"), compact("d")]) as p:
+            out = self.run_hook(vitals.hook_precompact,
+                                {"session_id": "s1", "transcript_path": p}, self.ENABLED)
+        self.assertIn("systemMessage", out)
+        self.assertNotIn("hookSpecificOutput", out)
 
 
 # ── Platform capability ─────────────────────────────────────────────────────

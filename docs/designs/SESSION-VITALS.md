@@ -98,9 +98,28 @@ order of magnitude, and the caching design they justified was dropped.
 | D10 | `retire` never touches transcript files | Archiving a file the running process still writes can break the session, and it contradicted the stated reason E4 was deferred |
 | D11 | Declare the Python 3.8+ dependency rather than remove it | See below |
 
-Implementation note on D8: the write was moved from PreCompact to **PostCompact**.
-PreCompact returns and compaction happens immediately, leaving the model no turn in
-which to call a tool. After compaction it holds a fresh summary and a full turn.
+Implementation note on D8, corrected twice:
+
+The prompt cannot live on **PreCompact** - that hook returns and compaction happens
+immediately, leaving the model no turn in which to call a tool, and anything injected is
+the first thing thrown away.
+
+It cannot live on **PostCompact** either, which is where it went first. That looked right
+(fresh summary, full turn available) but the event has no decision control at all: its
+output never reaches the model. Emitting `hookSpecificOutput` there fails schema
+validation outright, which is how the mistake surfaced - after a real compaction, not in
+any test, because the tests only exercised the write function and never the hook's output
+shape.
+
+It lives on **SessionStart with `source: compact`**, which fires at the same moment (both
+heartbeats recorded the same second) and is documented to support `additionalContext`.
+PostCompact is kept for its heartbeat alone: it is the only direct evidence that a
+compaction completed.
+
+The general lesson: hook events differ in what they accept, the differences are not
+guessable from the event name, and a hook that emits the wrong shape stays silently
+broken until something triggers it for real. `TestHookOutput` now pins the shape per
+event.
 
 ## Runtime dependency
 

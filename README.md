@@ -123,8 +123,10 @@ EOF
   root. If it only finds your home directory, or no repository at all, it refuses and
   says so instead of guessing.
 
-The PostCompact hook tells the model to use this command and to pass the real project
-directory, precisely because the shell's directory cannot be trusted.
+The prompt to do this is injected by the SessionStart hook when the session starts with
+`source: compact` - that is the first moment after compaction where the model both holds
+a fresh summary and can still call a tool. It is told to pass the real project directory,
+precisely because the shell's directory cannot be trusted.
 
 ### 3. Dangerous command gate
 
@@ -161,7 +163,7 @@ Tune or disable:
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
 | `/session-vitals:retire` | Assemble current progress and print handoff steps |
-| `vitals.py write-progress` | Write this session's progress block (used by the PostCompact hook) |
+| `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
 
 ### Why doctor exists
 
@@ -202,7 +204,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-26 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+31 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

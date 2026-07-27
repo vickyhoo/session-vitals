@@ -481,52 +481,75 @@ def health_context(m, level, base, modifiers):
 # ── Hook handlers ───────────────────────────────────────────────────────────
 
 def hook_health(payload, event, pending):
+    """Grade the session. Returns (system_message, context), either of which may be None."""
     sc = scan(payload.get("transcript_path"))
     beat(event)
     if not sc:
-        return
+        return None, None
     m = metrics(sc, pending=pending)
     level, base, modifiers = grade(m)
     if level == "ok":
-        return  # healthy sessions stay completely silent
+        return None, None  # healthy sessions stay completely silent
 
     icon = "🔴" if level == "crit" else "🟡"
     notify("session-vitals", "%s %s" % (base, "; ".join(modifiers) if modifiers else ""))
-    ctx = health_context(m, level, base, modifiers)
-    emit({
-        "systemMessage": "%s session-vitals: %s | %s" % (icon, base, advice(level)),
-        "hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx},
-        "additionalContext": ctx,
-    })
+    return ("%s session-vitals: %s | %s" % (icon, base, advice(level)),
+            health_context(m, level, base, modifiers))
 
 
 def hook_precompact(payload):
     # The compaction about to happen is not in the transcript yet. Count it explicitly,
     # or the pre-compaction warning is always one behind.
-    hook_health(payload, "PreCompact", pending=1)
+    #
+    # Only a systemMessage goes out. PreCompact cannot inject context, and it would be
+    # pointless anyway: whatever we added is the first thing compaction throws away.
+    msg, _ = hook_health(payload, "PreCompact", pending=1)
+    if msg:
+        emit({"systemMessage": msg})
 
 
 def hook_sessionstart(payload):
-    hook_health(payload, "SessionStart", pending=0)
+    msg, ctx = hook_health(payload, "SessionStart", pending=0)
+    chunks = [c for c in (ctx, progress_instruction(payload)) if c]
+    out = {}
+    if msg:
+        out["systemMessage"] = msg
+    if chunks:
+        out["hookSpecificOutput"] = {"hookEventName": "SessionStart",
+                                     "additionalContext": "\n\n".join(chunks)}
+    if out:
+        emit(out)
 
 
 def hook_postcompact(payload):
     """
-    Compaction just finished: the model holds a fresh summary and still has a full turn
-    for tool calls. This is the moment to have it write its own progress note. Mechanical
-    extraction only produces a transcript dump; what actually matters (where things stand,
-    why, what is next) only the model can articulate.
+    Side effects only. PostCompact has no decision control and its output never reaches
+    the model, so the checkpoint prompt cannot live here - it is emitted from SessionStart
+    with source=compact instead, which fires at the same moment and does support context.
+    The heartbeat is still worth recording: it is the only direct evidence that a
+    compaction completed.
     """
     beat("PostCompact")
+
+
+def progress_instruction(payload):
+    """
+    The checkpoint prompt, emitted right after compaction: the model holds a fresh summary
+    and still has a full turn for tool calls. Mechanical extraction only produces a
+    transcript dump; what actually matters (where things stand, why, what is next) only
+    the model can articulate.
+    """
+    if (payload.get("source") or "") != "compact":
+        return None
     cfg = load_config()
     if not cfg.get("progress_md", {}).get("enabled"):
-        return
+        return None
     fname = cfg["progress_md"].get("filename", "PROGRESS.md")
     sid = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
     # Route the write through our own command rather than letting the model use the
     # Write tool directly. Everything that makes this safe (credential scan, size cap,
     # per-session blocks, file lock, home-directory refusal) lives in that command.
-    ctx = (
+    return (
         "[session-vitals] The context was just compacted. Before continuing your current "
         "task, record your current understanding of this project: what you are working on, "
         "why this approach, decisions already settled, and what comes next. Write "
@@ -539,7 +562,6 @@ def hook_postcompact(payload):
         "is not reliable, and the command refuses to write into a home directory."
         % (fname, sid)
     )
-    emit({"hookSpecificOutput": {"hookEventName": "PostCompact", "additionalContext": ctx}})
 
 
 def hook_pretooluse(payload):
@@ -739,7 +761,7 @@ def cmd_retire(args):
     """
     print("\nSession retirement checklist\n")
     print("1. Checkpoint: write current progress into the project's PROGRESS.md")
-    print("   (PostCompact does this automatically when enabled; can also be done now)")
+    print("   (prompted automatically after each compaction when enabled; also fine now)")
     print("2. Save context: /context-save")
     print("3. Start a fresh session, then /context-restore")
     print("\nWorking directory: %s" % os.getcwd())
