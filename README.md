@@ -119,9 +119,18 @@ EOF
 
 - `--dir` given: trusted as-is, since not every project is a git repository. A home
   directory is still refused.
-- `--dir` omitted: walks up from the current directory looking for a git repository
-  root. If it only finds your home directory, or no repository at all, it refuses and
-  says so instead of guessing.
+- `--dir` omitted: the target is derived from **every** directory the session recorded,
+  not from the current one. Their common ancestor is stable across the session; if that
+  ancestor sits inside a git repository, its root wins.
+
+That handles the case a single reading gets wrong: a workspace holding a frontend and a
+backend repository side by side. The shell moves between them all session, so the answer
+would flip depending on when compaction fired, and progress spanning both would be filed
+under whichever one happened to be current. The common ancestor is the workspace, which
+is where a checkpoint covering both belongs.
+
+If the ancestor is your home directory, a top-level system path, or the session wandered
+across unrelated trees, it refuses and says so instead of guessing.
 
 The prompt to do this is injected by the SessionStart hook when the session starts with
 `source: compact` - that is the first moment after compaction where the model both holds
@@ -204,7 +213,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-31 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+36 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

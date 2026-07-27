@@ -289,6 +289,63 @@ class TestProjectDir(unittest.TestCase):
         self.assertIn("not a directory", why)
 
 
+class TestWorkspaceRoot(unittest.TestCase):
+    """
+    Deriving the target from every directory the session visited, rather than from
+    whichever one it happened to be in last. The case that forced this: a workspace
+    holding a frontend and a backend repository side by side, where the answer flipped
+    between the two depending on when compaction fired.
+    """
+
+    def transcript(self, dirs):
+        return Fx([json.dumps({"type": "user", "cwd": d}) for d in dirs])
+
+    def test_multi_repo_workspace_resolves_to_the_workspace(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d) / "workspace"           # not a repository itself
+            for repo in ("frontend", "backend"):
+                (ws / repo / ".git").mkdir(parents=True)
+            with self.transcript([str(ws), str(ws / "frontend"), str(ws / "backend")]) as p:
+                got, why = vitals.workspace_root(p)
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "workspace")
+
+    def test_single_repo_still_resolves_to_the_repo_root(self):
+        """The ancestor may be a subdirectory; the repository root is the better answer."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "proj"
+            (repo / ".git").mkdir(parents=True)
+            (repo / "src" / "api").mkdir(parents=True)
+            (repo / "src" / "web").mkdir(parents=True)
+            with self.transcript([str(repo / "src" / "api"), str(repo / "src" / "web")]) as p:
+                got, why = vitals.workspace_root(p)
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "proj")
+
+    def test_refuses_when_the_ancestor_is_too_broad(self):
+        """A session that wandered across unrelated trees has no meaningful root."""
+        with self.transcript([str(Path.home()), str(Path.home() / "a" / "b"),
+                              str(Path.home() / "c")]) as p:
+            got, why = vitals.workspace_root(p)
+        self.assertIsNone(got)
+        self.assertIn("too broad", why)
+
+    def test_refuses_without_recorded_directories(self):
+        with Fx([chat("no cwd anywhere in here")]) as p:
+            got, why = vitals.workspace_root(p)
+        self.assertIsNone(got)
+        self.assertIn("no working directory", why)
+
+    def test_ignores_relative_and_malformed_entries(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "proj"
+            (repo / ".git").mkdir(parents=True)
+            with self.transcript([str(repo), "relative/path", ""]) as p:
+                got, why = vitals.workspace_root(p)
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "proj")
+
+
 # ── Hook output shape ───────────────────────────────────────────────────────
 
 class TestHookOutput(unittest.TestCase):

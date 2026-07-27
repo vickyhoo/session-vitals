@@ -366,6 +366,72 @@ def scan_secrets(text):
     return [label for pat, label in SECRET_PATTERNS if re.search(pat, text)]
 
 
+CWD_RE = re.compile(rb'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def session_dirs(transcript_path):
+    """Every distinct shell directory the session recorded, oldest first."""
+    seen = []
+    try:
+        with open(transcript_path, "rb") as f:
+            for raw in f:
+                mo = CWD_RE.search(raw)
+                if not mo:
+                    continue
+                try:
+                    d = json.loads(b'"' + mo.group(1) + b'"')
+                except ValueError:
+                    continue
+                if d and d not in seen:
+                    seen.append(d)
+    except (OSError, TypeError):
+        return []
+    return seen
+
+
+def workspace_root(transcript_path):
+    """
+    Derive the directory a session actually worked in, from its own record of every
+    shell directory it visited. Returns (path, reason_if_refused).
+
+    A single `cwd` reading is worthless: it tracks the most recent shell operation.
+    The common ancestor of all of them is stable, and it degrades correctly in the
+    case that broke the single-reading approach - a workspace holding several
+    repositories side by side. One real session moved between `platform/` and
+    `admin/`; whichever one the shell happened to be in when compaction fired
+    determined where the checkpoint landed, and progress about both repositories
+    ended up filed under one of them. Their common ancestor is the workspace, which
+    is where a checkpoint spanning both belongs.
+
+    Below the ancestor, a git root still wins: for an ordinary single-repository
+    session the ancestor may be some subdirectory, and the repository root is the
+    better answer.
+    """
+    dirs = [d for d in session_dirs(transcript_path) if d.startswith("/")]
+    if not dirs:
+        return None, "the transcript records no working directory"
+    try:
+        common = Path(os.path.commonpath(dirs)).resolve()
+    except (OSError, ValueError):
+        return None, "the recorded working directories share no common ancestor"
+
+    got, _ = resolve_project_dir(str(common))
+    if got:
+        return got, None                      # inside a repository: use its root
+
+    home = Path.home().resolve()
+    if common == home or common in home.parents or len(common.parts) <= 2:
+        # At or above the home directory, or a top-level system path, means the session
+        # wandered far enough that the ancestor says nothing useful. Refuse rather than
+        # pick something. Directories outside home are fine - not everyone keeps their
+        # work there.
+        return None, ("the recorded working directories only share %s, which is too "
+                      "broad to write into" % common)
+    if not common.is_dir():
+        return None, "no longer a directory: %s" % common
+    return common, None
+
+
 def resolve_project_dir(start):
     """
     Decide which directory owns PROGRESS.md. Returns (path, reason_if_refused).
@@ -546,6 +612,22 @@ def progress_instruction(payload):
         return None
     fname = cfg["progress_md"].get("filename", "PROGRESS.md")
     sid = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+
+    # Resolve the target here rather than asking the model to name it. The transcript
+    # holds every directory the session visited, which is better evidence than anything
+    # the model can infer, and a wrong guess writes into someone else's repository.
+    root, why = workspace_root(payload.get("transcript_path"))
+    if root:
+        where = ("  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress --dir %s "
+                 "--session %s\n\nThat directory was derived from every working directory "
+                 "this session used. Override it only if you know it is wrong."
+                 % (root, sid))
+    else:
+        where = ("  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress "
+                 "--dir <project directory> --session %s\n\nThe directory could not be "
+                 "determined (%s), so pass the one this session is actually working on. "
+                 "The current shell directory is not reliable." % (sid, why))
+
     # Route the write through our own command rather than letting the model use the
     # Write tool directly. Everything that makes this safe (credential scan, size cap,
     # per-session blocks, file lock, home-directory refusal) lives in that command.
@@ -555,12 +637,8 @@ def progress_instruction(payload):
         "why this approach, decisions already settled, and what comes next. Write "
         "conclusions, not a log of the conversation.\n\n"
         "Save it by piping the text into this command. Do NOT write %s with the Write "
-        "tool directly, or the credential scan and concurrency handling are bypassed:\n\n"
-        "  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress --dir <project directory> "
-        "--session %s\n\n"
-        "Pass the actual project directory you are working on. The current shell directory "
-        "is not reliable, and the command refuses to write into a home directory."
-        % (fname, sid)
+        "tool directly, or the credential scan and concurrency handling are bypassed:\n\n%s"
+        % (fname, where)
     )
 
 
@@ -736,6 +814,11 @@ def cmd_write_progress(args):
             sys.stderr.write("refusing to write into your home directory\n")
             sys.exit(1)
         target = d
+    elif args.transcript:
+        target, why = workspace_root(args.transcript)
+        if not target:
+            sys.stderr.write("cannot decide where to write: %s\n" % why)
+            sys.exit(1)
     else:
         target, why = resolve_project_dir(os.getcwd())
         if not target:
@@ -783,7 +866,9 @@ def main():
 
     w = sub.add_parser("write-progress",
                        help="write this session's progress block, body read from stdin")
-    w.add_argument("--dir", help="project directory; inferred from the git root when omitted")
+    w.add_argument("--dir", help="project directory; inferred when omitted")
+    w.add_argument("--transcript", help="transcript path; its recorded working "
+                                        "directories decide the target when --dir is omitted")
     w.add_argument("--session", default="unknown", help="session id, used as the block key")
     w.set_defaults(func=cmd_write_progress)
 
