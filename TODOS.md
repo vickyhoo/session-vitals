@@ -59,6 +59,31 @@ aggregation are missing.
 
 ---
 
+## Investigated and rejected: custom notification icon
+
+Notifications currently show the Script Editor icon. Making it a custom one was
+investigated on macOS 26.5.2 and is **not worth doing**. Recorded here so nobody
+researches it twice.
+
+| Approach | Result |
+|---|---|
+| An `osascript` flag | No such flag exists |
+| `tell application "X" to display notification` to borrow X's icon | Verified dead on macOS 26. Notification ownership follows the originating process, not the tell target. Three test notifications through Finder, a generated app, and plain osascript all rendered identically under a "Script Editor" group |
+| Ship our own app bundle | `osacompile` generates one fine (568K, LSUIElement works), but an **ad-hoc signed app cannot register for notification permission** on macOS 26. The notification is silently dropped. Verified: the bundle never appears in `com.apple.ncprefs` |
+| `terminal-notifier` | Requires brew; `-appIcon` is ignored; `-sender` hangs on macOS 26 |
+
+The only path that would actually work is a Developer ID signed and notarized app
+bundle shipped as a binary in the repo, re-notarized on every release. That cost does
+not match a single-file, zero-dependency plugin.
+
+Worth noting the notification is a fallback channel anyway: `systemMessage` already
+renders inside Claude Code. The icon is only visible for a few seconds, and only when
+the user is away from the terminal.
+
+Reopen only if someone actually complains.
+
+---
+
 ## Verification experiment (not scheduled)
 
 Correlate compaction count against actual output quality, to establish whether the
