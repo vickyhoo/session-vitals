@@ -366,6 +366,42 @@ def scan_secrets(text):
     return [label for pat, label in SECRET_PATTERNS if re.search(pat, text)]
 
 
+def resolve_project_dir(start):
+    """
+    Decide which directory owns PROGRESS.md. Returns (path, reason_if_refused).
+
+    The hook payload's `cwd` is not the project: it tracks the most recent shell
+    operation, so one session can report four different directories, and people
+    routinely launch Claude Code from their home directory while working on a
+    project elsewhere. Writing into a home directory would be wrong every time.
+
+    Rule: walk up for a git repository root, and never accept the home directory
+    itself. If neither holds, refuse rather than guess.
+    """
+    home = Path.home().resolve()
+    try:
+        p = Path(start or "").resolve()
+    except (OSError, ValueError):
+        return None, "invalid path"
+    if not p.is_dir():
+        return None, "not a directory: %s" % start
+
+    cur = p
+    while True:
+        if (cur / ".git").exists():
+            if cur == home:
+                return None, "the git repository root is your home directory; refusing to write there"
+            return cur, None
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+
+    if p == home:
+        return None, ("resolved to your home directory. Claude Code was probably started "
+                      "from ~; pass --dir with the actual project path")
+    return None, "no git repository found above %s; pass --dir explicitly" % p
+
+
 def write_progress(cwd, session_id, body, cfg):
     """
     Write into a per-session block so concurrent sessions never clobber each other.
@@ -486,12 +522,22 @@ def hook_postcompact(payload):
     if not cfg.get("progress_md", {}).get("enabled"):
         return
     fname = cfg["progress_md"].get("filename", "PROGRESS.md")
+    sid = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+    # Route the write through our own command rather than letting the model use the
+    # Write tool directly. Everything that makes this safe (credential scan, size cap,
+    # per-session blocks, file lock, home-directory refusal) lives in that command.
     ctx = (
         "[session-vitals] The context was just compacted. Before continuing your current "
-        "task, write your current understanding of this project into %s: what you are "
-        "working on, why this approach, decisions already settled, and what comes next. "
-        "Use the existing session-vitals block format and update only the block belonging "
-        "to this session. Write conclusions, not a log of the conversation." % fname
+        "task, record your current understanding of this project: what you are working on, "
+        "why this approach, decisions already settled, and what comes next. Write "
+        "conclusions, not a log of the conversation.\n\n"
+        "Save it by piping the text into this command. Do NOT write %s with the Write "
+        "tool directly, or the credential scan and concurrency handling are bypassed:\n\n"
+        "  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress --dir <project directory> "
+        "--session %s\n\n"
+        "Pass the actual project directory you are working on. The current shell directory "
+        "is not reliable, and the command refuses to write into a home directory."
+        % (fname, sid)
     )
     emit({"hookSpecificOutput": {"hookEventName": "PostCompact", "additionalContext": ctx}})
 
@@ -642,6 +688,47 @@ def cmd_doctor(args):
     print()
 
 
+def cmd_write_progress(args):
+    """
+    Append or replace this session's block in the project's PROGRESS.md.
+    Body comes from stdin so arbitrary text needs no shell quoting.
+    """
+    cfg = load_config()
+    body = sys.stdin.read()
+    if not body.strip():
+        sys.stderr.write("nothing on stdin, aborted\n")
+        sys.exit(1)
+
+    if args.dir:
+        # An explicit directory is trusted, since not every project is a git
+        # repository. The home directory is still refused.
+        try:
+            d = Path(args.dir).expanduser().resolve()
+        except (OSError, ValueError):
+            sys.stderr.write("invalid --dir: %s\n" % args.dir)
+            sys.exit(1)
+        if not d.is_dir():
+            sys.stderr.write("--dir is not a directory: %s\n" % d)
+            sys.exit(1)
+        if d == Path.home().resolve():
+            sys.stderr.write("refusing to write into your home directory\n")
+            sys.exit(1)
+        target = d
+    else:
+        target, why = resolve_project_dir(os.getcwd())
+        if not target:
+            sys.stderr.write("cannot decide where to write: %s\n" % why)
+            sys.exit(1)
+
+    ok, info = write_progress(str(target), args.session, body, cfg)
+    if ok:
+        print("Wrote %s" % info)
+        beat("write-progress")
+    else:
+        sys.stderr.write("%s\n" % info)
+        sys.exit(1)
+
+
 def cmd_retire(args):
     """
     Only assembles the state and prints the handoff steps.
@@ -671,6 +758,12 @@ def main():
     sub.add_parser("scan", help="scan every session and rank them").set_defaults(func=cmd_scan)
     sub.add_parser("doctor", help="self check: runtime, wiring, heartbeat, format").set_defaults(func=cmd_doctor)
     sub.add_parser("retire", help="print the session retirement checklist").set_defaults(func=cmd_retire)
+
+    w = sub.add_parser("write-progress",
+                       help="write this session's progress block, body read from stdin")
+    w.add_argument("--dir", help="project directory; inferred from the git root when omitted")
+    w.add_argument("--session", default="unknown", help="session id, used as the block key")
+    w.set_defaults(func=cmd_write_progress)
 
     args = ap.parse_args()
     args.func(args)

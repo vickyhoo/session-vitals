@@ -89,9 +89,10 @@ file format follows the [Cline Memory Bank](https://docs.cline.bot/prompting/cli
 conventions.
 
 **This is off by default**, because it writes into your project directory and that file
-will probably end up committed. Once enabled there are three safeguards: a credential
-scan before every write (a hit aborts the whole write), a total size limit, and
-per-session blocks so concurrent sessions never clobber each other.
+will probably end up committed. Once enabled there are four safeguards: a credential
+scan before every write (a hit aborts the whole write), a total size limit, per-session
+blocks so concurrent sessions never clobber each other, and a refusal to write into a
+home directory.
 
 Enable it in `~/.session-vitals/config.json`:
 
@@ -100,6 +101,30 @@ Enable it in `~/.session-vitals/config.json`:
   "progress_md": { "enabled": true, "max_bytes": 120000, "filename": "PROGRESS.md" }
 }
 ```
+
+#### Which directory does it write to
+
+Not the shell's working directory. That value follows whatever the last command did -
+one real session reported four different directories - and people routinely start
+Claude Code from `~` while working on a project somewhere else.
+
+Writes go through a command rather than the model's Write tool, so the safeguards
+actually apply:
+
+```bash
+python3 vitals.py write-progress --dir /path/to/project --session <id> <<'EOF'
+what you are working on, why, what is settled, what comes next
+EOF
+```
+
+- `--dir` given: trusted as-is, since not every project is a git repository. A home
+  directory is still refused.
+- `--dir` omitted: walks up from the current directory looking for a git repository
+  root. If it only finds your home directory, or no repository at all, it refuses and
+  says so instead of guessing.
+
+The PostCompact hook tells the model to use this command and to pass the real project
+directory, precisely because the shell's directory cannot be trusted.
 
 ### 3. Dangerous command gate
 
@@ -136,6 +161,7 @@ Tune or disable:
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
 | `/session-vitals:retire` | Assemble current progress and print handoff steps |
+| `vitals.py write-progress` | Write this session's progress block (used by the PostCompact hook) |
 
 ### Why doctor exists
 
@@ -176,7 +202,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-22 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+26 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

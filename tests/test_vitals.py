@@ -250,6 +250,43 @@ class TestProgress(unittest.TestCase):
         self.assertIn("limit", why)
 
 
+# ── Project directory resolution ────────────────────────────────────────────
+
+class TestProjectDir(unittest.TestCase):
+    """
+    The hook payload's cwd is not the project directory. It follows the most recent
+    shell operation (one real session reported four different values), and people
+    routinely launch Claude Code from ~ while working on a project elsewhere.
+    Guessing wrong means writing PROGRESS.md into someone's home directory.
+    """
+
+    def test_finds_repo_root_from_subdirectory(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            deep = root / "src" / "nested"
+            deep.mkdir(parents=True)
+            got, why = vitals.resolve_project_dir(str(deep))
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "proj")
+
+    def test_refuses_when_no_repo_found(self):
+        with tempfile.TemporaryDirectory() as d:
+            got, why = vitals.resolve_project_dir(d)
+        self.assertIsNone(got)
+        self.assertIn("no git repository", why)
+
+    def test_refuses_home_directory(self):
+        got, why = vitals.resolve_project_dir(str(Path.home()))
+        self.assertIsNone(got)
+        self.assertIn("home directory", why)
+
+    def test_refuses_nonexistent_path(self):
+        got, why = vitals.resolve_project_dir("/nonexistent/nope")
+        self.assertIsNone(got)
+        self.assertIn("not a directory", why)
+
+
 # ── Platform capability ─────────────────────────────────────────────────────
 
 class TestPlatform(unittest.TestCase):
