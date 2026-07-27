@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Real transcripts never enter the repository: they contain full conversations,
+# project paths, and possibly pasted credentials. Tests build synthetic fixtures
+# inline in tests/test_vitals.py.
+*.jsonl

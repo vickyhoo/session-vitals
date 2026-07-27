@@ -1,0 +1,11 @@
+{
+  "name": "session-vitals",
+  "version": "1.0.0",
+  "description": "Report how often a Claude Code session has been compacted, checkpoint progress before compaction swallows it, and gate dangerous Bash commands.",
+  "keywords": ["session", "context", "compaction", "hooks", "safety"],
+  "author": {
+    "name": "vickyhoo",
+    "url": "https://github.com/vickyhoo"
+  },
+  "license": "MIT"
+}
