@@ -78,10 +78,14 @@ so the number stays as close to reality as it can.
 
 ### 2. Checkpointing around compaction
 
-Right after compaction the model holds a fresh summary and still has a full turn
-available for tool calls. That is when `session-vitals` asks it to write its current
-understanding into the project's `PROGRESS.md`: what it is working on, why this
-approach, what is settled, what comes next.
+Right after compaction the model holds a fresh summary of everything that was just
+condensed. That is when `session-vitals` asks it to write its current understanding into
+the project's `PROGRESS.md`: what it is working on, why this approach, what is settled,
+what comes next.
+
+The request is injected as context, and context alone does not grant a turn - after
+`/compact` the session simply idles. So the checkpoint is written when you next say
+something, alongside whatever you asked for, not during the compaction itself.
 
 It writes conclusions, not a log. Mechanical extraction only produces a transcript
 dump; a summary worth reading has to come from the model that was actually there. The
@@ -120,22 +124,24 @@ EOF
 - `--dir` given: trusted as-is, since not every project is a git repository. A home
   directory is still refused.
 - `--dir` omitted: the target is derived from **every** directory the session recorded,
-  not from the current one. Their common ancestor is stable across the session; if that
-  ancestor sits inside a git repository, its root wins.
+  not from the current one. Two kinds of noise are dropped first - paths inside
+  dependency trees like `node_modules`, and any directory that is a strict ancestor of
+  another recorded one, which is what the launch directory looks like. The common
+  ancestor of what remains is the answer; if it sits inside a git repository, its root
+  wins.
 
-That handles the case a single reading gets wrong: a workspace holding a frontend and a
-backend repository side by side. The shell moves between them all session, so the answer
-would flip depending on when compaction fired, and progress spanning both would be filed
-under whichever one happened to be current. The common ancestor is the workspace, which
-is where a checkpoint covering both belongs.
+Dropping ancestors deliberately keeps *siblings*. That is what makes the awkward case
+work: a workspace holding a frontend and a backend repository side by side. The shell
+moves between them all session, so a single reading would flip depending on when
+compaction fired, and progress spanning both would be filed under whichever one happened
+to be current. Neither is an ancestor of the other, so both survive, and their common
+ancestor is the workspace - where a checkpoint covering both belongs.
 
 If the ancestor is your home directory, a top-level system path, or the session wandered
 across unrelated trees, it refuses and says so instead of guessing.
 
-The prompt to do this is injected by the SessionStart hook when the session starts with
-`source: compact` - that is the first moment after compaction where the model both holds
-a fresh summary and can still call a tool. It is told to pass the real project directory,
-precisely because the shell's directory cannot be trusted.
+The hook resolves the directory itself and puts the concrete path into the prompt, rather
+than asking the model to name one it could only guess at.
 
 ### 3. Dangerous command gate
 
@@ -221,7 +227,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-39 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+41 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

@@ -406,6 +406,39 @@ def session_dirs(transcript_path):
     return seen
 
 
+VENDOR_SEGMENTS = {"node_modules", ".git", ".venv", "site-packages", "vendor",
+                   "target", "dist", "build", ".next", ".pnpm-store"}
+
+
+def _meaningful_dirs(dirs):
+    """
+    Trim the recorded directories down to the ones that say something about where the
+    work is. Two kinds of noise otherwise drag the common ancestor upward:
+
+    Dependency trees. A single `cd` into `node_modules/.pnpm/next@16/dist/docs` is deep
+    enough to be harmless on its own but it is not project structure; cut the path at
+    the first vendor segment.
+
+    The launch directory. Claude Code is routinely started from a directory holding many
+    projects, and that reading sits above every real one, pulling the ancestor up to the
+    container. Discard any directory that is a strict ancestor of another recorded one:
+    if the session actually worked there, it left a deeper reading too.
+
+    Deliberately preserved: sibling directories. Two repositories under one workspace are
+    ancestors of nothing, so both survive and their ancestor is still the workspace.
+    """
+    trimmed = []
+    for d in dirs:
+        parts = Path(d).parts
+        cut = next((i for i, seg in enumerate(parts) if seg in VENDOR_SEGMENTS), None)
+        p = Path(*parts[:cut]) if cut else Path(d)
+        if str(p) not in trimmed:
+            trimmed.append(str(p))
+    kept = [d for d in trimmed
+            if not any(o != d and o.startswith(d.rstrip("/") + "/") for o in trimmed)]
+    return kept or trimmed
+
+
 def workspace_root(transcript_path):
     """
     Derive the directory a session actually worked in, from its own record of every
@@ -427,6 +460,7 @@ def workspace_root(transcript_path):
     dirs = [d for d in session_dirs(transcript_path) if d.startswith("/")]
     if not dirs:
         return None, "the transcript records no working directory"
+    dirs = _meaningful_dirs(dirs)
     try:
         common = Path(os.path.commonpath(dirs)).resolve()
     except (OSError, ValueError):

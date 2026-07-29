@@ -322,6 +322,33 @@ class TestWorkspaceRoot(unittest.TestCase):
         self.assertIsNotNone(got, why)
         self.assertEqual(got.name, "proj")
 
+    def test_launch_directory_does_not_drag_the_root_up(self):
+        """
+        Claude Code is routinely started from a directory holding many projects. That
+        reading sits above the real one and pulled the answer up to the container - a
+        real session on cube-master resolved to the parent holding every project.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            container = Path(d) / "Projects"
+            repo = container / "cube-master"
+            (repo / ".git").mkdir(parents=True)
+            with self.transcript([str(container), str(repo)]) as p:
+                got, why = vitals.workspace_root(p)
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "cube-master")
+
+    def test_dependency_trees_are_cut_away(self):
+        """One cd into node_modules is not a statement about project structure."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "app"
+            deep = repo / "node_modules" / ".pnpm" / "next@16" / "dist"
+            deep.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            with self.transcript([str(repo), str(deep)]) as p:
+                got, why = vitals.workspace_root(p)
+        self.assertIsNotNone(got, why)
+        self.assertEqual(got.name, "app")
+
     def test_refuses_when_the_ancestor_is_too_broad(self):
         """A session that wandered across unrelated trees has no meaningful root."""
         with self.transcript([str(Path.home()), str(Path.home() / "a" / "b"),
