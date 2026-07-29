@@ -108,12 +108,29 @@ def _read_state():
         return {}
 
 
-def beat(event):
-    """Record a successful run. Hook failures are silent; only a heartbeat proves life."""
+SESSION_MEMORY = 40
+
+
+def beat(event, session_id=None):
+    """
+    Record a successful run. Hook failures are silent; only a heartbeat proves life.
+
+    The session id is recorded alongside, because a global heartbeat cannot answer the
+    question that actually matters: are the hooks live *here*. Claude Code captures hook
+    configuration when a session starts, so a session that predates the install never
+    runs them and says nothing about it. That is the case the tool is worst at: the long
+    sessions most in need of a checkpoint are exactly the ones old enough to miss it.
+    """
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         state = _read_state()
         state.setdefault("heartbeat", {})[event] = _now()
+        if session_id:
+            sessions = state.setdefault("sessions", {})
+            sessions[session_id] = _now()
+            if len(sessions) > SESSION_MEMORY:
+                for k in sorted(sessions, key=sessions.get)[:len(sessions) - SESSION_MEMORY]:
+                    del sessions[k]
         state["version"] = VERSION
         tmp = STATE_PATH.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as f:
@@ -549,7 +566,7 @@ def health_context(m, level, base, modifiers):
 def hook_health(payload, event, pending):
     """Grade the session. Returns (system_message, context), either of which may be None."""
     sc = scan(payload.get("transcript_path"))
-    beat(event)
+    beat(event, payload.get("session_id"))
     if not sc:
         return None, None
     m = metrics(sc, pending=pending)
@@ -595,7 +612,7 @@ def hook_postcompact(payload):
     The heartbeat is still worth recording: it is the only direct evidence that a
     compaction completed.
     """
-    beat("PostCompact")
+    beat("PostCompact", payload.get("session_id"))
 
 
 def progress_instruction(payload):
@@ -643,7 +660,7 @@ def progress_instruction(payload):
 
 
 def hook_pretooluse(payload):
-    beat("PreToolUse")
+    beat("PreToolUse", payload.get("session_id"))
     cfg = load_config()
     tool = payload.get("tool_name") or ""
     cmd = (payload.get("tool_input") or {}).get("command") or ""
@@ -759,7 +776,26 @@ def cmd_doctor(args):
             ts = hb.get(ev)
             print("[%s] %-14s last run %s" % (ok if ts else warn, ev, ts or "never"))
 
-    # 4. Transcript format still recognizable.
+    # 4. Are the hooks live in THIS session.
+    # Claude Code captures hook configuration when a session starts, so a session older
+    # than the install runs none of them and reports nothing at all. Reaching this line
+    # means a Bash call is in flight, and PreToolUse fires before the tool runs - so if
+    # this session id is missing from the record, its hooks are genuinely not wired.
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    seen_sessions = state.get("sessions") or {}
+    if not sid:
+        print("[%s] Cannot identify this session (CLAUDE_CODE_SESSION_ID unset); "
+              "skipping the per-session check" % warn)
+    elif sid in seen_sessions:
+        print("[%s] Hooks are live in this session (last %s)" % (ok, seen_sessions[sid]))
+    else:
+        print("[%s] Hooks have never fired in THIS session. It most likely started "
+              "before session-vitals was installed - hook configuration is captured at "
+              "session start, so nothing here is wired. Restart the session to pick it "
+              "up; until then no compaction reporting and no checkpointing happen, "
+              "silently." % bad)
+
+    # 5. Transcript format still recognizable.
     # Checking only the newest file misleads: the current session often has not
     # compacted yet. Look at the largest few; any marker proves the field is alive.
     root = Path.home() / ".claude" / "projects"

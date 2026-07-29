@@ -361,16 +361,17 @@ class TestHookOutput(unittest.TestCase):
                                "filename": "PROGRESS.md"}}
 
     def run_hook(self, fn, payload, cfg=None):
-        original_cfg, original_notify = vitals.load_config, vitals.notify
+        saved = (vitals.load_config, vitals.notify, vitals.beat)
         buf = io.StringIO()
         try:
             if cfg is not None:
                 vitals.load_config = lambda: cfg
             vitals.notify = lambda *a, **k: None   # no desktop popups during tests
+            vitals.beat = lambda *a, **k: None     # never touch the real state file
             with redirect_stdout(buf):
                 fn(payload)
         finally:
-            vitals.load_config, vitals.notify = original_cfg, original_notify
+            vitals.load_config, vitals.notify, vitals.beat = saved
         text = buf.getvalue()
         return json.loads(text) if text.strip() else None
 
@@ -407,6 +408,44 @@ class TestHookOutput(unittest.TestCase):
                                 {"session_id": "s1", "transcript_path": p}, self.ENABLED)
         self.assertIn("systemMessage", out)
         self.assertNotIn("hookSpecificOutput", out)
+
+
+# ── Heartbeat ───────────────────────────────────────────────────────────────
+
+class TestHeartbeat(unittest.TestCase):
+    """
+    A global heartbeat proves the plugin ran somewhere, which is not the question.
+    Hook configuration is captured when a session starts, so a session older than the
+    install runs nothing and reports nothing - and those are precisely the long sessions
+    that need a checkpoint most. Recording the session id makes that detectable.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (vitals.STATE_DIR, vitals.STATE_PATH)
+        vitals.STATE_DIR = Path(self.tmp.name)
+        vitals.STATE_PATH = vitals.STATE_DIR / "state.json"
+
+    def tearDown(self):
+        vitals.STATE_DIR, vitals.STATE_PATH = self.saved
+        self.tmp.cleanup()
+
+    def state(self):
+        return json.loads(vitals.STATE_PATH.read_text(encoding="utf-8"))
+
+    def test_records_the_session_that_beat(self):
+        vitals.beat("PreToolUse", "sess-a")
+        self.assertIn("sess-a", self.state()["sessions"])
+
+    def test_absent_session_id_is_not_recorded(self):
+        vitals.beat("PreToolUse")
+        self.assertEqual(self.state().get("sessions", {}), {})
+        self.assertIn("PreToolUse", self.state()["heartbeat"])
+
+    def test_forgets_the_oldest_sessions(self):
+        for i in range(vitals.SESSION_MEMORY + 5):
+            vitals.beat("PreToolUse", "sess-%03d" % i)
+        self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
 # ── Platform capability ─────────────────────────────────────────────────────

@@ -184,6 +184,14 @@ So every successful run records a heartbeat, and `doctor` checks whether that he
 is still beating, plus whether Claude Code's transcript field is still there. Run it
 after installing, and again every once in a while.
 
+**Sessions older than the install are wired to nothing.** Claude Code captures hook
+configuration when a session starts, so a session already running when you installed
+this plugin will never trigger it - no reporting, no checkpointing, no error either.
+That is the worst case, because the long-running sessions most in need of a checkpoint
+are exactly the ones old enough to miss it. `doctor` records the session id with every
+heartbeat and tells you when the current session is one of them. **Restart the session
+to pick the plugin up.**
+
 ## What it will not do
 
 - **Touch transcript files.** Read only. `retire` only assembles and advises; it never
@@ -213,7 +221,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-36 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+39 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License
