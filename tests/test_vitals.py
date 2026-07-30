@@ -415,6 +415,19 @@ class TestHookOutput(unittest.TestCase):
         self.assertEqual(hso["hookEventName"], "SessionStart")
         self.assertIn("write-progress", hso["additionalContext"])
 
+    def test_prompt_names_a_runnable_script_path(self):
+        """
+        $CLAUDE_PLUGIN_ROOT is exported to hook processes only. A prompt carrying it
+        expanded to "/vitals.py" and failed the moment a real session tried to obey:
+        "can't open file '/vitals.py'". The path has to be absolute and already resolved.
+        """
+        out = self.run_hook(vitals.hook_sessionstart,
+                            {"session_id": "s1", "source": "compact",
+                             "transcript_path": "/nonexistent.jsonl"}, self.ENABLED)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("CLAUDE_PLUGIN_ROOT", ctx)
+        self.assertIn(str(Path(vitals.__file__).resolve()), ctx)
+
     def test_other_sources_do_not(self):
         for source in ("resume", "startup", "clear"):
             self.assertIsNone(self.run_hook(

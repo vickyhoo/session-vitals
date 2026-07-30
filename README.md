@@ -141,7 +141,9 @@ If the ancestor is your home directory, a top-level system path, or the session 
 across unrelated trees, it refuses and says so instead of guessing.
 
 The hook resolves the directory itself and puts the concrete path into the prompt, rather
-than asking the model to name one it could only guess at.
+than asking the model to name one it could only guess at. The script path is spelled out
+in full for the same reason: `$CLAUDE_PLUGIN_ROOT` is exported to hook processes only, so
+a prompt carrying that variable expands to nothing when the model runs it through Bash.
 
 ### 3. Dangerous command gate
 
@@ -227,7 +229,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-41 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+42 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

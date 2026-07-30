@@ -29,6 +29,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -667,17 +668,21 @@ def progress_instruction(payload):
     # Resolve the target here rather than asking the model to name it. The transcript
     # holds every directory the session visited, which is better evidence than anything
     # the model can infer, and a wrong guess writes into someone else's repository.
+    # Spell out the absolute script path. $CLAUDE_PLUGIN_ROOT is exported to hook
+    # processes only, so a command carrying that variable expands to "/vitals.py" and
+    # fails when the model runs it through Bash - which is exactly what happened the
+    # first time a real session tried to follow these instructions.
+    me = shlex.quote(str(Path(__file__).resolve()))
     root, why = workspace_root(payload.get("transcript_path"))
     if root:
-        where = ("  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress --dir %s "
-                 "--session %s\n\nThat directory was derived from every working directory "
-                 "this session used. Override it only if you know it is wrong."
-                 % (root, sid))
+        where = ("  python3 %s write-progress --dir %s --session %s\n\nThat directory "
+                 "was derived from every working directory this session used. Override it "
+                 "only if you know it is wrong." % (me, shlex.quote(str(root)), sid))
     else:
-        where = ("  python3 \"$CLAUDE_PLUGIN_ROOT/vitals.py\" write-progress "
-                 "--dir <project directory> --session %s\n\nThe directory could not be "
-                 "determined (%s), so pass the one this session is actually working on. "
-                 "The current shell directory is not reliable." % (sid, why))
+        where = ("  python3 %s write-progress --dir <project directory> --session %s\n\n"
+                 "The directory could not be determined (%s), so pass the one this session "
+                 "is actually working on. The current shell directory is not reliable."
+                 % (me, sid, why))
 
     # Route the write through our own command rather than letting the model use the
     # Write tool directly. Everything that makes this safe (credential scan, size cap,
