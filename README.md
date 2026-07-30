@@ -181,8 +181,7 @@ version-namespaced and `plugin.json` pins the version by hand, so nothing guaran
 push is ever fetched. A stale copy that silently keeps running is the same class of
 failure as a silent hook.
 
-The design follows [gstack](https://github.com/garrytan/gstack)'s, including the parts
-that only exist because the obvious version compare misfires:
+Most of the design exists because the obvious version compare misfires:
 
 | Detail | Why |
 |---|---|

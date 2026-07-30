@@ -87,7 +87,8 @@ Reopen only if someone actually complains.
 ## Resolved: does a git-source install ever pick up changes
 
 **Answered by not depending on it.** The plugin now asks its own source repository for the
-declared version and tells the user, following gstack's design (see README section 4).
+declared version and tells the user (README section 4; the approach is gstack's, and the
+reasoning behind each guard is in the `vitals.py` comments rather than the README).
 Whether `/plugin update` fetches anything while the version string stays put no longer
 determines whether a stale install goes unnoticed - which was the actual risk.
 
