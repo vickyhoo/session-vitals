@@ -694,6 +694,10 @@ def progress_instruction(payload):
         "conclusions, not a log of the conversation.\n\n"
         "Save it by piping the text into this command. Do NOT write %s with the Write "
         "tool directly, or the credential scan and concurrency handling are bypassed:\n\n%s"
+        "\n\nIf the command exits non-zero, say so to the user in one plain sentence and "
+        "quote the error. Do not substitute the Write tool, do not improvise another way "
+        "to record it, and do not drop it in silence - a checkpoint nobody knows failed "
+        "is worse than no checkpoint at all."
         % (fname, where)
     )
 
@@ -786,6 +790,29 @@ def cmd_scan(args):
         print("    -> %s\n" % advice(level))
 
 
+
+def _installed_copies():
+    """Where Claude Code believes this plugin lives, per its own install record."""
+    found = []
+    try:
+        reg = json.loads((Path.home() / ".claude" / "plugins" /
+                          "installed_plugins.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return found
+    def walk(node):
+        if isinstance(node, dict):
+            path = node.get("installPath")
+            if isinstance(path, str):
+                found.append(Path(path) / "vitals.py")
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(reg)
+    return found
+
+
 def cmd_doctor(args):
     cfg = load_config()
     state = _read_state()
@@ -798,14 +825,25 @@ def cmd_doctor(args):
     print("[%s] Python %d.%d.%d %s" % (ok if good else bad, v.major, v.minor, v.micro,
                                        "" if good else "(needs 3.8+)"))
 
-    # 2. Platform capability
+    # 2. Which copy is running.
+    # Tracking down why the fixes appeared to have no effect took a detour through the
+    # plugin cache: a stale copy sat at the recorded install path while a different file
+    # was doing the work. Print the answer instead of making anyone deduce it.
+    me = Path(__file__).resolve()
+    print("[%s] Running %s" % (ok, me))
+    for other in _installed_copies():
+        if other != me and other.is_file():
+            print("[%s] A different copy is registered as installed: %s. If it is stale, "
+                  "the behavior you see may not match the code you edited." % (warn, other))
+
+    # 3. Platform capability
     if approval_available():
         print("[%s] Approval dialog available (%s)" % (ok, platform.system()))
     else:
         print("[%s] Approval dialog unavailable (%s, needs macOS + osascript). "
               "Diagnostics and checkpointing are unaffected." % (warn, platform.system()))
 
-    # 3. Heartbeat
+    # 4. Heartbeat
     hb = state.get("heartbeat") or {}
     if not hb:
         print("[%s] No heartbeat ever recorded - hooks may not be wired up, "
@@ -815,7 +853,7 @@ def cmd_doctor(args):
             ts = hb.get(ev)
             print("[%s] %-14s last run %s" % (ok if ts else warn, ev, ts or "never"))
 
-    # 4. Are the hooks live in THIS session.
+    # 5. Are the hooks live in THIS session.
     # Claude Code captures hook configuration when a session starts, so a session older
     # than the install runs none of them and reports nothing at all. Reaching this line
     # means a Bash call is in flight, and PreToolUse fires before the tool runs - so if
@@ -834,7 +872,7 @@ def cmd_doctor(args):
               "up; until then no compaction reporting and no checkpointing happen, "
               "silently." % bad)
 
-    # 5. Transcript format still recognizable.
+    # 6. Transcript format still recognizable.
     # Checking only the newest file misleads: the current session often has not
     # compacted yet. Look at the largest few; any marker proves the field is alive.
     root = Path.home() / ".claude" / "projects"
