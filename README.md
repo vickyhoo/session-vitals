@@ -173,6 +173,41 @@ Tune or disable:
 
 `approval` takes `off`, `default` (dangerous commands only) or `all` (every Bash call).
 
+### 4. Update checking
+
+The plugin asks its own source repository whether a newer version exists, rather than
+waiting for the plugin manager to notice. It has to: the install path is
+version-namespaced and `plugin.json` pins the version by hand, so nothing guarantees a
+push is ever fetched. A stale copy that silently keeps running is the same class of
+failure as a silent hook.
+
+The design follows [gstack](https://github.com/garrytan/gstack)'s, including the parts
+that only exist because the obvious version compare misfires:
+
+| Detail | Why |
+|---|---|
+| Version read through a commit-pinned raw URL, resolved with `git ls-remote` | GitHub's branch raw CDN can serve stale content for minutes after a push, so a check run right after a release reports "up to date" and the release goes unnoticed |
+| Only a **strictly higher** remote counts | A stale CDN, or a local checkout ahead of the branch, otherwise produces a backwards "upgrade available" |
+| Response must match a version shape | An error page must not become "upgrade to `<!DOCTYPE html>`" |
+| Cache TTL of 1h when current, 12h when an update waits | Catch a release quickly; do not nag every session once you know |
+| Snooze escalates 24h, 48h, 1 week, keyed by version | A declined update should not become a daily tax, but a *new* release has not been declined |
+| Every failure is silence | A version check must never be why a session feels slow or broken |
+
+Hooks only ever read the cache; the network request happens in a detached background
+process, so session start never waits on it.
+
+```bash
+python3 vitals.py update-check            # UP_TO_DATE / UPGRADE_AVAILABLE / UNKNOWN
+python3 vitals.py update-check --force    # ignore cache and snooze
+python3 vitals.py update-check --snooze   # remind me later
+```
+
+Turn it off, and the plugin makes no network requests whatsoever:
+
+```json
+{ "update_check": false }
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -181,6 +216,7 @@ Tune or disable:
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
 | `/session-vitals:retire` | Assemble current progress and print handoff steps |
 | `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
+| `vitals.py update-check` | Compare the installed version against the source repository |
 
 ### Why doctor exists
 
@@ -205,7 +241,10 @@ to pick the plugin up.**
 - **Touch transcript files.** Read only. `retire` only assembles and advises; it never
   moves or deletes anything, because the running process is still writing that file.
   Clean up disk space manually once a session is actually closed.
-- **Send anything anywhere.** Entirely local, no network calls.
+- **Send anything anywhere.** Nothing about your sessions, projects or conversations
+  leaves the machine. The one exception is the update check below, which is an outbound
+  request to GitHub carrying no payload; turn it off and there is no network traffic at
+  all.
 - **Store conversation content.** Only compaction counts, byte offsets and heartbeat
   timestamps.
 
@@ -229,7 +268,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-42 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+54 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

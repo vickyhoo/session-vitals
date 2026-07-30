@@ -46,6 +46,19 @@ TAIL_HOT_BYTES = 4 * 1024 * 1024   # this much piled up since last compaction
 STATE_DIR = Path.home() / ".session-vitals"
 CONFIG_PATH = STATE_DIR / "config.json"
 STATE_PATH = STATE_DIR / "state.json"
+UPDATE_CACHE_PATH = STATE_DIR / "last-update-check"
+SNOOZE_PATH = STATE_DIR / "update-snoozed"
+
+# Update checking, modelled on gstack's. The plugin manager is not trusted to notice a
+# release: the install path is version-namespaced and the version string is pinned by
+# hand, so nothing guarantees a push is ever fetched. Asking the source directly and
+# telling the user is the only mechanism fully under this plugin's control.
+UPDATE_REPO = "https://github.com/vickyhoo/session-vitals.git"
+UPDATE_BRANCH = "main"
+UPDATE_MANIFEST = ".claude-plugin/plugin.json"   # the version of record
+UPDATE_TTL_CURRENT = 60 * 60             # up to date: re-check hourly, catch a release fast
+UPDATE_TTL_PENDING = 12 * 60 * 60        # update waiting: remind, but do not nag every session
+SNOOZE_STEPS = (24 * 3600, 48 * 3600, 7 * 24 * 3600)
 
 MARKER = b"isCompactSummary"
 IS_MACOS = sys.platform == "darwin"
@@ -143,6 +156,169 @@ def beat(event, session_id=None):
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ── Update checking ─────────────────────────────────────────────────────────
+
+def _vtuple(s):
+    """Comparable form of a dotted version. Non-numeric parts sort as 0."""
+    out = []
+    for part in str(s).split("."):
+        digits = re.match(r"\d+", part.strip())
+        out.append(int(digits.group()) if digits else 0)
+    return tuple(out)
+
+
+def _read_snooze():
+    try:
+        ver, level, epoch = SNOOZE_PATH.read_text(encoding="utf-8").split()
+        return ver, int(level), float(epoch)
+    except (OSError, ValueError):
+        return None, 0, 0.0
+
+
+def is_snoozed(remote):
+    """
+    A reminder the user dismissed stays dismissed - but only for this version, and only
+    for a while. Escalating backoff keeps a declined update from becoming a daily tax,
+    while a new release resets it, because that one has not been declined yet.
+    """
+    ver, level, epoch = _read_snooze()
+    if ver != remote or level < 1:
+        return False
+    step = SNOOZE_STEPS[min(level, len(SNOOZE_STEPS)) - 1]
+    return (datetime.now(timezone.utc).timestamp() - epoch) < step
+
+
+def snooze(remote):
+    """Record a dismissal, one level deeper than last time for this same version."""
+    ver, level, _ = _read_snooze()
+    level = (level + 1) if ver == remote else 1
+    level = min(level, len(SNOOZE_STEPS))
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        SNOOZE_PATH.write_text("%s %d %.0f" % (remote, level,
+                                               datetime.now(timezone.utc).timestamp()),
+                               encoding="utf-8")
+    except OSError:
+        pass
+    return SNOOZE_STEPS[level - 1]
+
+
+def _fetch_remote_version(timeout=5):
+    """
+    Read the version the source repository currently declares, or None.
+
+    Resolved through a commit-pinned raw URL rather than a branch one. gstack learned
+    this the hard way: GitHub's branch raw CDN can serve stale content for minutes after
+    a push, so a check run right after a release reports "up to date" and the release
+    goes unnoticed. `git ls-remote` always returns live HEAD, and a SHA-pinned URL is
+    immediately consistent.
+    """
+    import urllib.request
+
+    urls = []
+    try:
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0",
+                   GIT_HTTP_LOW_SPEED_LIMIT="1000", GIT_HTTP_LOW_SPEED_TIME=str(timeout))
+        r = subprocess.run(["git", "ls-remote", UPDATE_REPO, "refs/heads/" + UPDATE_BRANCH],
+                           capture_output=True, timeout=timeout, env=env)
+        sha = r.stdout.decode("utf-8", "replace").split()[:1]
+        if sha and re.fullmatch(r"[0-9a-f]{40}", sha[0]):
+            urls.append(_raw_url(sha[0]))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    urls.append(_raw_url(UPDATE_BRANCH))     # fallback: no git, or a mirror without refs
+
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                ver = json.loads(resp.read().decode("utf-8")).get("version")
+        except Exception:
+            continue                          # any failure is silence, never an error
+        # Validate the shape. An error page or a redirect to HTML must not be mistaken
+        # for a version, or every session gets told to upgrade to "<!DOCTYPE html>".
+        if isinstance(ver, str) and re.fullmatch(r"\d+(\.\d+)*", ver.strip()):
+            return ver.strip()
+    return None
+
+
+def _raw_url(ref):
+    slug = re.sub(r"^https://github\.com/|\.git$", "", UPDATE_REPO)
+    return "https://raw.githubusercontent.com/%s/%s/%s" % (slug, ref, UPDATE_MANIFEST)
+
+
+def check_update(cfg, force=False, network=True):
+    """
+    Returns (state, local, remote): state is "current", "upgrade" or "unknown".
+
+    "unknown" means the question could not be answered - no network, no repository yet,
+    a mangled response. It is deliberately indistinguishable from silence to the caller
+    that renders notices: a version check must never be the reason a session feels slow
+    or noisy.
+    """
+    local = VERSION
+    if cfg.get("update_check") is False:
+        return "unknown", local, None
+    if force:
+        for p in (UPDATE_CACHE_PATH, SNOOZE_PATH):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+    cached = _read_update_cache()
+    if cached and cached["local"] == local:
+        ttl = UPDATE_TTL_PENDING if cached["state"] == "upgrade" else UPDATE_TTL_CURRENT
+        fresh = (datetime.now(timezone.utc).timestamp() - cached["at"]) < ttl
+        if fresh or not network:
+            return cached["state"], local, cached.get("remote")
+    if not network:
+        return "unknown", local, None
+
+    remote = _fetch_remote_version()
+    if not remote:
+        _write_update_cache("current", local, None)
+        return "current", local, None
+    # Only a strictly higher remote counts. A stale CDN or a local checkout running
+    # ahead of the branch would otherwise produce a backwards "upgrade available".
+    state = "upgrade" if _vtuple(remote) > _vtuple(local) else "current"
+    _write_update_cache(state, local, remote)
+    return state, local, remote
+
+
+def _read_update_cache():
+    try:
+        d = json.loads(UPDATE_CACHE_PATH.read_text(encoding="utf-8"))
+        return d if isinstance(d.get("at"), (int, float)) and d.get("local") else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _write_update_cache(state, local, remote):
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        UPDATE_CACHE_PATH.write_text(json.dumps({
+            "state": state, "local": local, "remote": remote,
+            "at": datetime.now(timezone.utc).timestamp(),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def spawn_update_refresh():
+    """
+    Refresh the cache out of band. A hook must not wait on the network: `git ls-remote`
+    plus an HTTP fetch is seconds of latency bolted onto session start, every session.
+    The TTL keeps this to roughly once an hour.
+    """
+    try:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
+                          "update-check", "--quiet"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except (OSError, ValueError):
+        pass
 
 
 # ── Transcript scanning ─────────────────────────────────────────────────────
@@ -626,10 +802,29 @@ def hook_precompact(payload):
         emit({"systemMessage": msg})
 
 
+def update_notice(cfg):
+    """Read-only glance at the cached answer, plus a background refresh when it is old."""
+    state, local, remote = check_update(cfg, network=False)
+    if state == "unknown" or (state == "upgrade" and not remote):
+        spawn_update_refresh()
+        return None
+    cached = _read_update_cache()
+    ttl = UPDATE_TTL_PENDING if state == "upgrade" else UPDATE_TTL_CURRENT
+    if not cached or (datetime.now(timezone.utc).timestamp() - cached["at"]) >= ttl:
+        spawn_update_refresh()
+    if state != "upgrade" or is_snoozed(remote):
+        return None
+    return ("session-vitals %s is available (you have %s) | /plugin update "
+            "session-vitals@vickyhoo" % (remote, local))
+
+
 def hook_sessionstart(payload):
     msg, ctx = hook_health(payload, "SessionStart", pending=0)
     chunks = [c for c in (ctx, progress_instruction(payload)) if c]
     out = {}
+    notice = update_notice(load_config())
+    if notice:
+        msg = "%s\n⬆ %s" % (msg, notice) if msg else "⬆ %s" % notice
     if msg:
         out["systemMessage"] = msg
     if chunks:
@@ -791,6 +986,26 @@ def cmd_scan(args):
 
 
 
+def cmd_update_check(args):
+    cfg = load_config()
+    state, local, remote = check_update(cfg, force=args.force)
+    if args.quiet:
+        return
+    if state == "upgrade" and args.snooze:
+        hours = snooze(remote) // 3600
+        print("Reminder for %s snoozed for %dh" % (remote, hours))
+        return
+    if state == "upgrade":
+        print("UPGRADE_AVAILABLE %s %s" % (local, remote))
+        print("  /plugin update session-vitals@vickyhoo")
+        print("  python3 %s update-check --snooze   (remind me later)"
+              % Path(__file__).resolve())
+    elif remote:
+        print("UP_TO_DATE %s" % local)
+    else:
+        print("UNKNOWN %s (could not reach %s)" % (local, UPDATE_REPO))
+
+
 def _installed_copies():
     """Where Claude Code believes this plugin lives, per its own install record."""
     found = []
@@ -843,7 +1058,23 @@ def cmd_doctor(args):
         print("[%s] Approval dialog unavailable (%s, needs macOS + osascript). "
               "Diagnostics and checkpointing are unaffected." % (warn, platform.system()))
 
-    # 4. Heartbeat
+    # 4. Version. Asked over the network here, because doctor is explicit and the user
+    # is already waiting; the hooks only ever read the cache this fills.
+    cfg = load_config()
+    if cfg.get("update_check") is False:
+        print("[%s] Update checking disabled in config" % warn)
+    else:
+        st, local, remote = check_update(cfg)
+        if st == "upgrade":
+            print("[%s] Version %s is available (you have %s). Run "
+                  "/plugin update session-vitals@vickyhoo" % (warn, remote, local))
+        elif remote:
+            print("[%s] Up to date (%s)" % (ok, local))
+        else:
+            print("[%s] Could not reach %s to compare versions; treating %s as current"
+                  % (warn, UPDATE_REPO, local))
+
+    # 5. Heartbeat
     hb = state.get("heartbeat") or {}
     if not hb:
         print("[%s] No heartbeat ever recorded - hooks may not be wired up, "
@@ -853,7 +1084,7 @@ def cmd_doctor(args):
             ts = hb.get(ev)
             print("[%s] %-14s last run %s" % (ok if ts else warn, ev, ts or "never"))
 
-    # 5. Are the hooks live in THIS session.
+    # 6. Are the hooks live in THIS session.
     # Claude Code captures hook configuration when a session starts, so a session older
     # than the install runs none of them and reports nothing at all. Reaching this line
     # means a Bash call is in flight, and PreToolUse fires before the tool runs - so if
@@ -872,7 +1103,7 @@ def cmd_doctor(args):
               "up; until then no compaction reporting and no checkpointing happen, "
               "silently." % bad)
 
-    # 6. Transcript format still recognizable.
+    # 7. Transcript format still recognizable.
     # Checking only the newest file misleads: the current session often has not
     # compacted yet. Look at the largest few; any marker proves the field is alive.
     root = Path.home() / ".claude" / "projects"
@@ -984,6 +1215,15 @@ def main():
                                         "directories decide the target when --dir is omitted")
     w.add_argument("--session", default="unknown", help="session id, used as the block key")
     w.set_defaults(func=cmd_write_progress)
+
+    u = sub.add_parser("update-check", help="compare the installed version against the source")
+    u.add_argument("--force", action="store_true",
+                   help="ignore the cache and any snooze")
+    u.add_argument("--snooze", action="store_true",
+                   help="dismiss the current notice, with escalating backoff")
+    u.add_argument("--quiet", action="store_true",
+                   help="refresh the cache and print nothing; used by the hooks")
+    u.set_defaults(func=cmd_update_check)
 
     args = ap.parse_args()
     args.func(args)

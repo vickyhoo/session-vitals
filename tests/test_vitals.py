@@ -488,6 +488,110 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Update checking ─────────────────────────────────────────────────────────
+
+class TestUpdateCheck(unittest.TestCase):
+    """
+    The plugin manager cannot be trusted to notice a release: the install path is
+    version-namespaced and the version string is pinned by hand. So the check is done
+    here, following gstack's design - including the parts that exist because a naive
+    version compare misfires.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.saved = (vitals.STATE_DIR, vitals.UPDATE_CACHE_PATH, vitals.SNOOZE_PATH,
+                      vitals._fetch_remote_version, vitals.VERSION,
+                      vitals.spawn_update_refresh)
+        vitals.spawn_update_refresh = lambda: None   # no real subprocesses in tests
+        vitals.STATE_DIR = d
+        vitals.UPDATE_CACHE_PATH = d / "last-update-check"
+        vitals.SNOOZE_PATH = d / "update-snoozed"
+        self.calls = []
+        vitals.VERSION = "1.2.0"
+
+    def tearDown(self):
+        (vitals.STATE_DIR, vitals.UPDATE_CACHE_PATH, vitals.SNOOZE_PATH,
+         vitals._fetch_remote_version, vitals.VERSION,
+         vitals.spawn_update_refresh) = self.saved
+        self.tmp.cleanup()
+
+    def remote(self, value):
+        def fake():
+            self.calls.append(value)
+            return value
+        vitals._fetch_remote_version = fake
+
+    def test_newer_remote_is_an_upgrade(self):
+        self.remote("1.3.0")
+        self.assertEqual(vitals.check_update({})[0], "upgrade")
+
+    def test_older_remote_is_not(self):
+        """
+        A stale CDN, or a local checkout running ahead of the branch, would otherwise
+        produce a backwards "upgrade available" pointing at the version already replaced.
+        """
+        self.remote("1.1.9")
+        self.assertEqual(vitals.check_update({})[0], "current")
+
+    def test_version_ordering_is_numeric_not_lexical(self):
+        self.assertGreater(vitals._vtuple("1.10.0"), vitals._vtuple("1.9.0"))
+        self.assertGreater(vitals._vtuple("2.0"), vitals._vtuple("1.999.999"))
+
+    def test_unreachable_source_reports_current(self):
+        """Silence on failure. A version check must never be why a session feels broken."""
+        vitals._fetch_remote_version = lambda: None
+        state, local, remote = vitals.check_update({})
+        self.assertEqual(state, "current")
+        self.assertIsNone(remote)
+
+    def test_fresh_cache_skips_the_network(self):
+        self.remote("1.3.0")
+        vitals.check_update({})
+        vitals.check_update({})
+        self.assertEqual(len(self.calls), 1)
+
+    def test_offline_mode_never_fetches(self):
+        """The hooks read the cache only; session start must not wait on the network."""
+        self.remote("1.3.0")
+        vitals.check_update({}, network=False)
+        self.assertEqual(self.calls, [])
+
+    def test_disabled_in_config(self):
+        self.remote("1.3.0")
+        self.assertEqual(vitals.check_update({"update_check": False})[0], "unknown")
+        self.assertEqual(self.calls, [])
+
+    def test_snooze_escalates_then_caps(self):
+        self.assertEqual(vitals.snooze("1.3.0"), 24 * 3600)
+        self.assertEqual(vitals.snooze("1.3.0"), 48 * 3600)
+        self.assertEqual(vitals.snooze("1.3.0"), 7 * 24 * 3600)
+        self.assertEqual(vitals.snooze("1.3.0"), 7 * 24 * 3600)   # capped
+        self.assertTrue(vitals.is_snoozed("1.3.0"))
+
+    def test_a_new_version_resets_the_snooze(self):
+        """Declining 1.3.0 is not declining 1.4.0."""
+        vitals.snooze("1.3.0")
+        self.assertTrue(vitals.is_snoozed("1.3.0"))
+        self.assertFalse(vitals.is_snoozed("1.4.0"))
+        self.assertEqual(vitals.snooze("1.4.0"), 24 * 3600)
+
+    def test_expired_snooze_speaks_again(self):
+        vitals.SNOOZE_PATH.write_text("1.3.0 1 0", encoding="utf-8")   # epoch 0
+        self.assertFalse(vitals.is_snoozed("1.3.0"))
+
+    def test_corrupt_snooze_file_is_ignored(self):
+        vitals.SNOOZE_PATH.write_text("garbage", encoding="utf-8")
+        self.assertFalse(vitals.is_snoozed("1.3.0"))
+
+    def test_notice_is_silent_while_snoozed(self):
+        self.remote("1.3.0")
+        vitals.check_update({})
+        vitals.snooze("1.3.0")
+        self.assertIsNone(vitals.update_notice({}))
+
+
 # ── Platform capability ─────────────────────────────────────────────────────
 
 class TestPlatform(unittest.TestCase):

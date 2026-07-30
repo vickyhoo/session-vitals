@@ -84,27 +84,28 @@ Reopen only if someone actually complains.
 
 ---
 
-## Open question: does a git-source install ever pick up changes
+## Resolved: does a git-source install ever pick up changes
 
-While debugging on 2026-07-30, `installed_plugins.json` was found pointing at a frozen
-copy under `~/.claude/plugins/cache/vickyhoo/session-vitals/1.0.0/`, three days stale and
-missing every fix made since. It turned out not to be the code running - the
-directory-source marketplace serves the working tree live, proved by `state.json`
-recording session ids that only the newer code writes - but it raises a question that has
-**not** been answered:
+**Answered by not depending on it.** The plugin now asks its own source repository for the
+declared version and tells the user, following gstack's design (see README section 4).
+Whether `/plugin update` fetches anything while the version string stays put no longer
+determines whether a stale install goes unnoticed - which was the actual risk.
 
-`plugin.json` pins `"version": "1.0.0"` deliberately (D5: without it the commit SHA
-becomes the version and every push ships an "update"). The install path is
-version-namespaced. So for someone installing from the git source the way the README
-describes, it is unclear whether `/plugin update` fetches anything at all while the
-version string stays put.
+Two consequences worth keeping in mind:
 
-Needs testing before anyone else installs this: publish a change without bumping the
-version, install from git in a clean profile, and see whether the change arrives. If it
-does not, either the version has to move on every release or D5 has to be revisited.
+- **The version has to move on every release.** The check compares version strings, so a
+  push without a bump is invisible to it. This does not conflict with D5, which was about
+  the opposite failure: omitting `version` makes the commit SHA the version and every push
+  looks like an update. Explicit version plus an owned check means releases are deliberate.
+- **Still untested end to end**, because nothing is published yet. The check currently
+  reports `UNKNOWN` and stays silent, which is the designed behavior for an unreachable
+  source. Confirm against a real repository once it exists.
 
-`doctor` now prints which file is actually running and flags a registered copy that
-differs, so at least the next person does not have to deduce it.
+The original finding, kept for context: `installed_plugins.json` pointed at a frozen copy
+under `~/.claude/plugins/cache/vickyhoo/session-vitals/1.0.0/`, three days stale and
+missing every fix. It was not the code running - the directory-source marketplace serves
+the working tree live, proved by `state.json` recording session ids that only newer code
+writes. `doctor` now prints which file runs and flags a differing registered copy.
 
 ---
 
