@@ -515,6 +515,73 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Reading the checkpoint back ─────────────────────────────────────────────
+
+class TestProgressPointer(unittest.TestCase):
+    """
+    Writing a checkpoint nothing ever reads is half a feature. A fresh session starts
+    knowing nothing, and the file it needs sits in the project directory with no reason
+    for anyone to open it.
+    """
+
+    CFG = {"progress_md": {"enabled": True, "filename": "PROGRESS.md",
+                           "inject_max_bytes": 200}}
+
+    def run_it(self, payload, cfg):
+        saved = vitals.load_config
+        try:
+            vitals.load_config = lambda: cfg
+            return vitals.progress_pointer(payload)
+        finally:
+            vitals.load_config = saved
+
+    def project(self, d, body):
+        root = Path(d) / "proj"
+        (root / ".git").mkdir(parents=True)
+        (root / "PROGRESS.md").write_text(body, encoding="utf-8")
+        return root
+
+    def test_small_file_is_inlined(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self.project(d, "<!-- session-vitals:s1 -->\nwe chose Postgres\n")
+            got = self.run_it({"source": "startup", "cwd": str(root)}, self.CFG)
+        self.assertIn("we chose Postgres", got)
+
+    def test_large_file_is_announced_not_pasted(self):
+        """A 120KB dump would cost more context than it saves - the opposite of the deal."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self.project(d, "<!-- session-vitals:s1 -->\n" + "detail. " * 500)
+            got = self.run_it({"source": "startup", "cwd": str(root)}, self.CFG)
+        self.assertNotIn("detail. detail.", got)
+        self.assertIn("Read it", got)
+
+    def test_found_from_a_subdirectory(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self.project(d, "<!-- session-vitals:s1 -->\nnotes\n")
+            deep = root / "src" / "api"
+            deep.mkdir(parents=True)
+            got = self.run_it({"source": "startup", "cwd": str(deep)}, self.CFG)
+        self.assertIsNotNone(got)
+
+    def test_silent_when_there_is_nothing_to_say(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            self.assertIsNone(self.run_it({"source": "startup", "cwd": str(root)}, self.CFG))
+
+    def test_compaction_does_not_get_it_twice(self):
+        """The compaction path already injects its own instruction."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self.project(d, "<!-- session-vitals:s1 -->\nnotes\n")
+            self.assertIsNone(self.run_it({"source": "compact", "cwd": str(root)}, self.CFG))
+
+    def test_injection_can_be_turned_off(self):
+        cfg = {"progress_md": dict(self.CFG["progress_md"], inject=False)}
+        with tempfile.TemporaryDirectory() as d:
+            root = self.project(d, "<!-- session-vitals:s1 -->\nnotes\n")
+            self.assertIsNone(self.run_it({"source": "startup", "cwd": str(root)}, cfg))
+
+
 # ── Update checking ─────────────────────────────────────────────────────────
 
 class TestUpdateCheck(unittest.TestCase):

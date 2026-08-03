@@ -106,6 +106,31 @@ Enable it in `~/.session-vitals/config.json`:
 }
 ```
 
+#### Reading it back
+
+A checkpoint nothing ever reads is half a feature, so the SessionStart hook hands the
+file to each new session. Small files are inlined; anything past `inject_max_bytes`
+(8KB by default) is announced with its path and left for the model to open, because a
+120KB dump would cost more context than it saves.
+
+It is injected as **background, not instructions** - and the model is told that where
+the file disagrees with the code, the code wins. A checkpoint is a snapshot of what was
+believed at the time, and stale conclusions asserted with confidence are worse than none.
+
+At `startup` the transcript is empty, so the launch directory is the only signal
+available - the one moment it is worth trusting, since nothing has moved yet. On
+`resume` the usual resolution applies. Both are tried, best evidence first.
+
+```json
+{ "progress_md": { "inject": false } }
+```
+
+**You do not need to mention it in `CLAUDE.md`.** That works, but it costs context in
+every session whether or not the file is relevant, has to be repeated per project, and
+outlives the plugin if you uninstall it. The one case for adding it: other tools reading
+`CLAUDE.md`/`AGENTS.md` cannot see this hook, so a one-line pointer there is worth it if
+you also use Cursor, Codex or similar on the same repository.
+
 #### Which directory does it write to
 
 Not the shell's working directory. That value follows whatever the last command did -
@@ -267,7 +292,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-55 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+61 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License
