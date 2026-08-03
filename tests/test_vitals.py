@@ -11,6 +11,7 @@ only cares about fields and offsets, which synthetic data covers fine.
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -348,6 +349,32 @@ class TestWorkspaceRoot(unittest.TestCase):
                 got, why = vitals.workspace_root(p)
         self.assertIsNotNone(got, why)
         self.assertEqual(got.name, "app")
+
+    def test_finds_this_sessions_transcript_from_the_environment(self):
+        """
+        CLAUDE_CODE_SESSION_ID *is* present for Bash tool calls, unlike
+        $CLAUDE_PLUGIN_ROOT. That is what lets the commands resolve a project directory
+        as precisely as the hooks do, instead of guessing from the shell's location.
+        """
+        saved_home, saved_env = Path.home, os.environ.get("CLAUDE_CODE_SESSION_ID")
+        with tempfile.TemporaryDirectory() as d:
+            sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            proj = Path(d) / ".claude" / "projects" / "-some-slug"
+            proj.mkdir(parents=True)
+            (proj / (sid + ".jsonl")).write_text("{}\n", encoding="utf-8")
+            try:
+                Path.home = staticmethod(lambda: Path(d))
+                os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+                self.assertEqual(vitals.current_transcript(),
+                                 str(proj / (sid + ".jsonl")))
+                os.environ["CLAUDE_CODE_SESSION_ID"] = "../../etc/passwd"
+                self.assertIsNone(vitals.current_transcript())   # not a session id
+            finally:
+                Path.home = saved_home
+                if saved_env is None:
+                    os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+                else:
+                    os.environ["CLAUDE_CODE_SESSION_ID"] = saved_env
 
     def test_refuses_when_the_ancestor_is_too_broad(self):
         """A session that wandered across unrelated trees has no meaningful root."""

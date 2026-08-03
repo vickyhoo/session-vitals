@@ -616,6 +616,24 @@ def _meaningful_dirs(dirs):
     return kept or trimmed
 
 
+def current_transcript():
+    """
+    This session's transcript, found from the session id Claude Code exports.
+
+    Unlike $CLAUDE_PLUGIN_ROOT, CLAUDE_CODE_SESSION_ID *is* present in the environment
+    of Bash tool calls, which is what makes the commands able to resolve a project
+    directory as precisely as the hooks do.
+    """
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not sid or not re.fullmatch(r"[0-9a-fA-F\-]{8,64}", sid):
+        return None
+    try:
+        hits = list((Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % sid))
+    except OSError:
+        return None
+    return str(hits[0]) if hits else None
+
+
 def workspace_root(transcript_path):
     """
     Derive the directory a session actually worked in, from its own record of every
@@ -1186,11 +1204,20 @@ def cmd_retire(args):
     writing to it, and archiving a live file can break the session. Disk cleanup
     is a manual step.
     """
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+    root, why = workspace_root(current_transcript())
+    target = shlex.quote(str(root)) if root else "<project directory>"
+
     print("\nSession retirement checklist\n")
-    print("1. Checkpoint: write current progress into the project's PROGRESS.md")
-    print("   (prompted automatically after each compaction when enabled; also fine now)")
-    print("2. Save context: /context-save")
-    print("3. Start a fresh session, then /context-restore")
+    print("1. Checkpoint. Pipe your understanding into this command - not the Write")
+    print("   tool, which bypasses the credential scan and the per-session blocks:\n")
+    print("     python3 %s write-progress --dir %s --session %s\n"
+          % (shlex.quote(str(Path(__file__).resolve())), target, sid))
+    if not root:
+        print("   The project directory could not be determined (%s), so pass it.\n" % why)
+    print("2. Save anything the checkpoint does not cover: open questions, half-finished")
+    print("   edits, links you will want again.")
+    print("3. Start a fresh session and point it at the checkpoint file.")
     print("\nWorking directory: %s" % os.getcwd())
     print("Note: this command never deletes or moves transcript files. "
           "To reclaim disk space, confirm the session is closed and do it manually.\n")

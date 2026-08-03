@@ -213,7 +213,7 @@ Turn it off, and the plugin makes no network requests whatsoever:
 |---|---|
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
-| `/session-vitals:retire` | Assemble current progress and print handoff steps |
+| `/session-vitals:retire` | Print a ready-to-run checkpoint command and the handoff steps |
 | `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
 | `vitals.py update-check` | Compare the installed version against the source repository |
 
@@ -267,7 +267,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-54 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+55 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License
