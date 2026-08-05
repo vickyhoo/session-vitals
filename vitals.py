@@ -2,11 +2,11 @@
 """
 session-vitals — watch long Claude Code sessions and leave a record before they degrade.
 
-Three jobs:
+Two jobs:
   1. Report how often the session transcript has been compacted, how tightly, and
      how much conversation got summarized away
-  2. Persist working context before compaction swallows it
-  3. Gate dangerous Bash commands behind a confirmation dialog
+  2. Persist working context before compaction swallows it, and hand it to the
+     next session
 
 What this metric does and does not claim (do not cross this line in docs or marketing):
 compaction count is a DESCRIPTIVE metric, not a proven cause. What is known to be true:
@@ -18,8 +18,8 @@ re-written into the transcript on resume or fork, so a naive count overstates th
 This implementation hashes summary content to deduplicate, and measures gaps in bytes
 rather than line numbers.
 
-Runtime requirement: Python 3.8+. The approval dialog needs macOS `osascript`;
-on other platforms approval disables itself automatically.
+Runtime requirement: Python 3.8+. Desktop notifications need macOS `osascript`;
+elsewhere they are skipped and everything else still works.
 """
 
 import argparse
@@ -63,22 +63,6 @@ SNOOZE_STEPS = (24 * 3600, 48 * 3600, 7 * 24 * 3600)
 MARKER = b"isCompactSummary"
 IS_MACOS = sys.platform == "darwin"
 
-DEFAULT_DANGER_PATTERNS = [
-    r"\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)",
-    r"\brm\s+--(recursive|force)\b",
-    r"\bgit\s+push\b.*--force",
-    r"\bgit\s+reset\s+--hard\b",
-    r"\bgit\s+clean\s+-[a-zA-Z]*f",
-    r"\bdd\s+if=",
-    r"\bmkfs\b",
-    r"\bsudo\b",
-    r">\s*/dev/(disk|sd)",
-    r"\bDROP\s+(TABLE|DATABASE)\b",
-    r"\bTRUNCATE\s+TABLE\b",
-    r"\bkubectl\s+delete\b",
-    r"\bterraform\s+destroy\b",
-]
-
 # Credential scan before writing into a project file. A hit aborts the whole write:
 # better to skip one checkpoint than to commit a secret into git history.
 SECRET_PATTERNS = [
@@ -96,9 +80,6 @@ SECRET_PATTERNS = [
 
 def load_config():
     cfg = {
-        "approval": "default",          # off | default | all
-        "approval_timeout_seconds": 60,
-        "danger_patterns": DEFAULT_DANGER_PATTERNS,
         "progress_md": {"enabled": False, "max_bytes": 120_000, "filename": "PROGRESS.md"},
     }
     try:
@@ -122,7 +103,10 @@ def _read_state():
         return {}
 
 
-SESSION_MEMORY = 40
+# Raised when the PreToolUse heartbeat went away with the approval gate: SessionStart
+# now refreshes an id once per session instead of on every Bash call, so a long-lived
+# session is easier to push out of the record.
+SESSION_MEMORY = 200
 
 
 def beat(event, session_id=None):
@@ -469,13 +453,6 @@ def advice(level):
     return ""
 
 
-# ── Platform capability ─────────────────────────────────────────────────────
-
-def approval_available():
-    """Approval needs a GUI dialog. Without one, disable it loudly rather than fail silently."""
-    return IS_MACOS and _which("osascript") is not None
-
-
 def _which(name):
     for d in os.environ.get("PATH", "").split(os.pathsep):
         p = Path(d) / name
@@ -485,6 +462,10 @@ def _which(name):
 
 
 # ── Notifications ───────────────────────────────────────────────────────────
+
+def notifications_available():
+    return IS_MACOS and _which("osascript") is not None
+
 
 NOTIFY_SCRIPT = """on run argv
   display notification (item 1 of argv) with title (item 2 of argv) sound name "Tink"
@@ -520,38 +501,6 @@ def _osascript(script, args, timeout):
         return r.stdout.decode("utf-8", "replace").strip()
     except (OSError, subprocess.SubprocessError):
         return None
-
-
-# ── Approval ────────────────────────────────────────────────────────────────
-
-def is_dangerous(cmd, cfg):
-    mode = cfg.get("approval", "default")
-    if mode == "off":
-        return False
-    if mode == "all":
-        return True
-    return any(re.search(p, cmd) for p in cfg.get("danger_patterns", DEFAULT_DANGER_PATTERNS))
-
-
-def ask_approval(cmd, cfg):
-    """
-    Return allow or deny. Anything short of an explicit Allow is a deny.
-
-    Why not defer: defer means "fall back to the normal permission flow", and under
-    bypassPermissions that flow runs the command. For a dialog nobody may be watching,
-    defer is a green light.
-    """
-    timeout = int(cfg.get("approval_timeout_seconds", 60))
-    script = """on run argv
-  set r to display dialog (item 1 of argv) ¬
-    with title "session-vitals · dangerous command" ¬
-    buttons {"Deny", "Allow"} default button "Deny" ¬
-    with icon caution giving up after %d
-  if gave up of r then return "TIMEOUT"
-  return button returned of r
-end run""" % timeout
-    out = _osascript(script, [cmd[:800]], timeout=timeout + 10)
-    return "allow" if out == "Allow" else "deny"
 
 
 # ── PROGRESS.md ─────────────────────────────────────────────────────────────
@@ -853,6 +802,18 @@ def hook_sessionstart(payload):
         emit(out)
 
 
+def hook_pretooluse(payload):
+    """
+    Accepted and ignored. The approval gate this served was removed in favour of Claude
+    Code's native `ask` rules, but hook configuration is captured when a session starts,
+    so every session already running still calls this. Removing the subcommand outright
+    made each of their Bash calls print an argparse error - the same snapshot behavior
+    that hides a missing hook, biting from the other side. Kept as a no-op until those
+    sessions end.
+    """
+    beat("PreToolUse", payload.get("session_id"))
+
+
 def hook_postcompact(payload):
     """
     Side effects only. PostCompact has no decision control and its output never reaches
@@ -985,38 +946,6 @@ def progress_pointer(payload):
             % (path, blocks, "" if blocks == 1 else "s", len(text) / 1024.0))
 
 
-def hook_pretooluse(payload):
-    beat("PreToolUse", payload.get("session_id"))
-    cfg = load_config()
-    tool = payload.get("tool_name") or ""
-    cmd = (payload.get("tool_input") or {}).get("command") or ""
-    if tool != "Bash" or not cmd or not is_dangerous(cmd, cfg):
-        return
-
-    if not approval_available():
-        # No dialog available. Let the command through rather than block it: denying
-        # everything on a platform where approval was never implemented turns the
-        # plugin into a denial of service with no visible cause.
-        emit({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "defer",
-            },
-            "systemMessage": "session-vitals: no approval dialog on this platform (needs macOS), check skipped",
-        })
-        return
-
-    decision = ask_approval(cmd, cfg)
-    out = {"hookEventName": "PreToolUse", "permissionDecision": decision}
-    if decision == "deny":
-        out["permissionDecisionReason"] = (
-            "Blocked by session-vitals: the user did not approve this dangerous command "
-            "(denied or timed out). Ask the user to confirm manually if it needs to run."
-        )
-        notify("session-vitals", "Blocked: %s" % cmd[:80])
-    emit({"hookSpecificOutput": out})
-
-
 # ── Subcommands ─────────────────────────────────────────────────────────────
 
 def cmd_hook(args):
@@ -1140,11 +1069,11 @@ def cmd_doctor(args):
                   "the behavior you see may not match the code you edited." % (warn, other))
 
     # 3. Platform capability
-    if approval_available():
-        print("[%s] Approval dialog available (%s)" % (ok, platform.system()))
+    if notifications_available():
+        print("[%s] Desktop notifications available (%s)" % (ok, platform.system()))
     else:
-        print("[%s] Approval dialog unavailable (%s, needs macOS + osascript). "
-              "Diagnostics and checkpointing are unaffected." % (warn, platform.system()))
+        print("[%s] Desktop notifications unavailable (%s, needs macOS + osascript). "
+              "Reporting and checkpointing are unaffected." % (warn, platform.system()))
 
     # 4. Version. Asked over the network here, because doctor is explicit and the user
     # is already waiting; the hooks only ever read the cache this fills.
@@ -1168,15 +1097,16 @@ def cmd_doctor(args):
         print("[%s] No heartbeat ever recorded - hooks may not be wired up, "
               "or nothing has triggered yet" % bad)
     else:
-        for ev in ("SessionStart", "PreCompact", "PostCompact", "PreToolUse"):
+        for ev in ("SessionStart", "PreCompact", "PostCompact"):
             ts = hb.get(ev)
             print("[%s] %-14s last run %s" % (ok if ts else warn, ev, ts or "never"))
 
     # 6. Are the hooks live in THIS session.
     # Claude Code captures hook configuration when a session starts, so a session older
     # than the install runs none of them and reports nothing at all. Reaching this line
-    # means a Bash call is in flight, and PreToolUse fires before the tool runs - so if
-    # this session id is missing from the record, its hooks are genuinely not wired.
+    # SessionStart records the id of every session that did run them, so an absent id
+    # means this session started before the plugin existed - or, far less likely, has
+    # been pushed out of the record by SESSION_MEMORY newer ones.
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     seen_sessions = state.get("sessions") or {}
     if not sid:

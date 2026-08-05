@@ -172,27 +172,7 @@ class TestPending(unittest.TestCase):
         self.assertEqual(vitals.metrics(sc, pending=1)["layers"], 3)
 
 
-# ── Dangerous commands and credentials ──────────────────────────────────────
-
-class TestDanger(unittest.TestCase):
-
-    CFG = {"approval": "default", "danger_patterns": vitals.DEFAULT_DANGER_PATTERNS}
-
-    def test_matches_destructive(self):
-        for cmd in ["rm -rf build/", "git push --force origin main",
-                    "git reset --hard HEAD~3", "sudo systemctl stop nginx",
-                    "terraform destroy", "DROP TABLE users;"]:
-            self.assertTrue(vitals.is_dangerous(cmd, self.CFG), cmd)
-
-    def test_allows_ordinary(self):
-        for cmd in ["ls -la", "git status", "npm test", "cat README.md",
-                    "grep -rn TODO ."]:
-            self.assertFalse(vitals.is_dangerous(cmd, self.CFG), cmd)
-
-    def test_mode_off_and_all(self):
-        self.assertFalse(vitals.is_dangerous("rm -rf /", {"approval": "off"}))
-        self.assertTrue(vitals.is_dangerous("ls", {"approval": "all"}))
-
+# ── Credential scanning ─────────────────────────────────────────────────────
 
 class TestSecretScan(unittest.TestCase):
 
@@ -690,12 +670,12 @@ class TestUpdateCheck(unittest.TestCase):
 
 class TestPlatform(unittest.TestCase):
 
-    def test_approval_requires_macos(self):
-        """Off macOS, approval must report unavailable so the hook skips instead of blocking."""
+    def test_notifications_require_macos(self):
+        """Off macOS the notification is skipped; nothing else may depend on it."""
         original = vitals.IS_MACOS
         try:
             vitals.IS_MACOS = False
-            self.assertFalse(vitals.approval_available())
+            self.assertFalse(vitals.notifications_available())
         finally:
             vitals.IS_MACOS = original
 

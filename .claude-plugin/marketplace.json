@@ -4,15 +4,20 @@
     "name": "vickyhoo",
     "url": "https://github.com/vickyhoo"
   },
-  "description": "Claude Code plugins by vickyhoo",
+  "description": "Report how often a Claude Code session has been compacted, checkpoint what it concluded before compaction swallows it, and hand that to the next session.",
   "plugins": [
     {
       "name": "session-vitals",
       "source": "./",
-      "description": "Report how often a Claude Code session has been compacted, checkpoint progress before compaction swallows it, and gate dangerous Bash commands.",
+      "description": "Report how often a Claude Code session has been compacted, checkpoint what it concluded before compaction swallows it, and hand that to the next session.",
       "version": "1.0.0",
       "category": "workflow",
-      "tags": ["session", "context", "compaction", "safety"],
+      "tags": [
+        "session",
+        "context",
+        "compaction",
+        "safety"
+      ],
       "author": {
         "name": "vickyhoo"
       }

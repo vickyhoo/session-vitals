@@ -1,8 +1,7 @@
 # session-vitals
 
-Keep an eye on long Claude Code sessions: how often they have been compacted, a
-checkpoint before compaction swallows your progress, and a gate in front of dangerous
-Bash commands.
+Keep an eye on long Claude Code sessions: how often they have been compacted, and a
+checkpoint that survives compaction and reaches the next session.
 
 ```
 🔴         22    137.9MB  acme--platform-rewrite
@@ -25,9 +24,9 @@ As of 2026 Claude Code ships as a native binary and carries no runtime of its ow
 you cannot assume Node or Python is already on the machine. Run `python3 --version`
 before installing.
 
-The approval dialog needs macOS `osascript`. **On other platforms approval turns itself
-off**; diagnostics and checkpointing keep working. `/session-vitals:doctor` tells you
-exactly how far your platform is supported.
+Desktop notifications need macOS `osascript`. Elsewhere they are skipped and everything
+else works unchanged. `/session-vitals:doctor` tells you exactly how far your platform is
+supported.
 
 ## Install
 
@@ -170,35 +169,7 @@ than asking the model to name one it could only guess at. The script path is spe
 in full for the same reason: `$CLAUDE_PLUGIN_ROOT` is exported to hook processes only, so
 a prompt carrying that variable expands to nothing when the model runs it through Bash.
 
-### 3. Dangerous command gate
-
-Commands like `rm -rf`, `git push --force`, `git reset --hard`, `DROP TABLE` and
-`terraform destroy` raise a confirmation dialog. **Anything short of an explicit Allow
-is a deny**, including a timeout.
-
-Because if you run with `bypassPermissions`, "no decision" means the command executes,
-and for a dialog nobody may be watching, that is a green light.
-
-> **This is a speed bump, not a security boundary.**
->
-> Regex matching stops slips, not intent. Variables, aliases, shell functions, `eval`,
-> `sh -c`, wrapping it in a script, a different database client - all trivially get
-> around it. Do not relax because it is installed. That would leave you worse off than
-> not having it.
-
-Tune or disable:
-
-```json
-{
-  "approval": "default",
-  "approval_timeout_seconds": 60,
-  "danger_patterns": ["custom regexes, replaces the default list"]
-}
-```
-
-`approval` takes `off`, `default` (dangerous commands only) or `all` (every Bash call).
-
-### 4. Update checking
+### 3. Update checking
 
 The plugin asks its own source repository whether a newer version exists, rather than
 waiting for the plugin manager to notice. It has to: the install path is
@@ -266,11 +237,34 @@ to pick the plugin up.**
   moves or deletes anything, because the running process is still writing that file.
   Clean up disk space manually once a session is actually closed.
 - **Send anything anywhere.** Nothing about your sessions, projects or conversations
-  leaves the machine. The one exception is the update check below, which is an outbound
+  leaves the machine. The one exception is the update check above, which is an outbound
   request to GitHub carrying no payload; turn it off and there is no network traffic at
   all.
 - **Store conversation content.** Only compaction counts, byte offsets and heartbeat
   timestamps.
+- **Gate dangerous commands.** It used to, with a regex list and a confirmation dialog.
+  That was removed: Claude Code's native rules do the same job better.
+
+### Gating commands, without this plugin
+
+`bypassPermissions` is not all-or-nothing - explicit `ask` rules still prompt in that
+mode, and so does a built-in circuit breaker for `rm -rf /` and `rm -rf ~`. So write the
+rules natively:
+
+```json
+{
+  "permissions": {
+    "ask": ["Bash(* sudo *)", "Bash(rm -rf *)", "Bash(* terraform destroy *)"],
+    "defaultMode": "bypassPermissions"
+  }
+}
+```
+
+Native rules understand shell operators (`&&`, `|`, `;` each match independently), strip
+wrappers like `timeout` and `xargs`, and wait for you instead of timing out into a denial
+mid-command. A regex over the raw string, which is what this plugin had, does none of
+that. Keeping a weaker duplicate of a built-in safety mechanism is worse than not
+shipping one: it invites you to relax because something is watching.
 
 ## Adapting other AI tools
 
@@ -283,8 +277,8 @@ python3 vitals.py doctor
 ```
 
 The `hook` subcommand reads one JSON object from stdin and understands these fields:
-`transcript_path`, `session_id`, `cwd`, `tool_name`, `tool_input.command`. Output is
-Claude Code hook JSON. Any tool that can produce that shape can plug in.
+`transcript_path`, `session_id`, `cwd`, `source`. Output is Claude Code hook JSON. Any
+tool that can produce that shape can plug in.
 
 ## Development
 
@@ -292,7 +286,7 @@ Claude Code hook JSON. Any tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-61 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+58 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

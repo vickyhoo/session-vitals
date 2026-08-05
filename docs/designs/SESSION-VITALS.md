@@ -121,6 +121,36 @@ guessable from the event name, and a hook that emits the wrong shape stays silen
 broken until something triggers it for real. `TestHookOutput` now pins the shape per
 event.
 
+## Removed 2026-08-05: the dangerous-command gate
+
+Shipped as job 3, removed after reading Claude Code's permission documentation properly.
+
+`bypassPermissions` is not all-or-nothing: **explicit `ask` rules still prompt in that
+mode**, and there is a built-in circuit breaker for `rm -rf /` and `rm -rf ~` including
+substitution forms. The premise the gate was built on - that under `bypassPermissions`
+nothing asks, so a hook is the only place left to intervene - was simply wrong.
+
+Native rules also beat the implementation on the merits: they match each subcommand of a
+compound command independently, strip wrappers like `timeout` and `xargs`, and wait for
+an answer instead of timing out into a denial partway through an ssh deploy. A regex over
+the raw command string does none of that, and it fired on `echo "we should not sudo here"`
+while letting `ssh host 'systemctl restart nginx'` through.
+
+The decisive argument is not redundancy but harm: a weaker duplicate of a built-in safety
+mechanism invites the user to relax because something is watching. The README already
+said "speed bump, not a security boundary" - the honest conclusion is not to ship it.
+
+Removal notes worth keeping:
+
+- `PreToolUse` was also the per-session heartbeat, which is what `doctor` uses to detect
+  a session older than the install. That moved to `SessionStart`, which fires once per
+  session instead of on every Bash call, so `SESSION_MEMORY` was raised from 40 to 200 -
+  a long-lived session is now much easier to push out of the record.
+- Deleting the `pretooluse` subcommand immediately broke every **running** session: their
+  hook configuration was snapshotted at startup and still called it, so each Bash call
+  printed an argparse error. It is kept as a no-op. The same snapshot behavior that hides
+  a newly installed hook also pins a removed one.
+
 ## Runtime dependency
 
 The distribution check initially covered only marketplace and versioning, and **missed
