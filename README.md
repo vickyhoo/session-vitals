@@ -136,6 +136,11 @@ Not the shell's working directory. That value follows whatever the last command 
 one real session reported four different directories - and people routinely start
 Claude Code from `~` while working on a project somewhere else.
 
+Ask for one at any time with `/session-vitals:checkpoint`. It replaces this session's
+block rather than appending, so running it whenever a decision settles is the intended
+use, not just at the end. `/session-vitals:retire` is the same write plus the handoff
+steps for starting a fresh session.
+
 Writes go through a command rather than the model's Write tool, so the safeguards
 actually apply:
 
@@ -210,6 +215,7 @@ Turn it off, and the plugin makes no network requests whatsoever:
 | `/session-vitals:status` | Report on **this** session: what has been summarized away, whether it has a checkpoint, what to do next |
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
+| `/session-vitals:checkpoint` | Save what this session concluded into `PROGRESS.md`, without ending it |
 | `/session-vitals:retire` | Print a ready-to-run checkpoint command and the handoff steps |
 | `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
 | `vitals.py update-check` | Compare the installed version against the source repository |
@@ -288,7 +294,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-63 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+66 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

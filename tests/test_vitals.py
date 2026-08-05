@@ -495,6 +495,40 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Checkpoint command line ─────────────────────────────────────────────────
+
+class TestCheckpointCommand(unittest.TestCase):
+    """
+    `checkpoint` and `retire` both hand the user a write-progress line. They share one
+    builder so they cannot drift into giving different instructions for the same write.
+    """
+
+    def test_explicit_dir_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            cmd, target, problem = vitals.checkpoint_command("s1", d)
+        self.assertIsNone(problem)
+        self.assertIn("--session s1", cmd)
+        self.assertIn(str(target), cmd)
+
+    def test_unresolvable_returns_the_reason(self):
+        """The caller needs the reason to tell the user what to pass instead."""
+        saved = vitals.current_transcript
+        try:
+            vitals.current_transcript = lambda: None
+            cmd, target, problem = vitals.checkpoint_command("s1")
+        finally:
+            vitals.current_transcript = saved
+        self.assertIsNone(cmd)
+        self.assertTrue(problem)
+
+    def test_paths_are_quoted(self):
+        with tempfile.TemporaryDirectory() as d:
+            odd = Path(d) / "my project"
+            odd.mkdir()
+            cmd, _, _ = vitals.checkpoint_command("s1", str(odd))
+        self.assertIn("'%s'" % odd, cmd)
+
+
 # ── Single-session report ───────────────────────────────────────────────────
 
 class TestSessionReport(unittest.TestCase):

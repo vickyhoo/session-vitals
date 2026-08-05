@@ -1310,6 +1310,58 @@ def cmd_write_progress(args):
         sys.exit(1)
 
 
+def checkpoint_command(sid, override=None):
+    """
+    The exact line to pipe a checkpoint into, with everything resolved.
+
+    Returns (command, target, problem). Shared by `checkpoint` and `retire` so the two
+    cannot drift into giving different instructions for the same operation.
+    """
+    if override:
+        target, problem = Path(override).expanduser(), None
+    else:
+        target, problem = workspace_root(current_transcript())
+    if not target:
+        return None, None, problem
+    return ("python3 %s write-progress --dir %s --session %s"
+            % (shlex.quote(str(Path(__file__).resolve())),
+               shlex.quote(str(target)), sid or "unknown"), target, None)
+
+
+def cmd_checkpoint(args):
+    """
+    Record progress mid-session, without the implication that the session is ending.
+
+    Until this existed the only ways in were the prompt injected after a compaction and
+    `retire`, which reads as "this session is over". Wanting to save what you have
+    concluded while still working is the ordinary case, and it had no door.
+    """
+    cfg = load_config()
+    opts = cfg.get("progress_md", {})
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+
+    if not opts.get("enabled"):
+        print("\nPROGRESS.md is disabled. Enable it in %s:\n" % CONFIG_PATH)
+        print('  { "progress_md": { "enabled": true } }\n')
+        return
+
+    cmd, target, problem = checkpoint_command(sid, args.dir)
+    if not cmd:
+        print("\nCannot tell which project this session belongs to: %s" % problem)
+        print("Re-run with the project directory, e.g.:\n")
+        print("  /session-vitals:checkpoint --dir /path/to/project\n")
+        return
+
+    fname = opts.get("filename", "PROGRESS.md")
+    f = target / fname
+    key = re.sub(r"[^A-Za-z0-9_\-]", "", sid)[:32]
+    existing = f.is_file() and ("session-vitals:%s " % key) in f.read_text(
+        encoding="utf-8", errors="replace")
+    print("\n%s %s" % ("Replacing this session's block in" if existing
+                       else "Adding this session's block to", f))
+    print("\nPipe the text into:\n\n  %s\n" % cmd)
+
+
 def cmd_retire(args):
     """
     Only assembles the state and prints the handoff steps.
@@ -1319,16 +1371,17 @@ def cmd_retire(args):
     is a manual step.
     """
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
-    root, why = workspace_root(current_transcript())
-    target = shlex.quote(str(root)) if root else "<project directory>"
+    cmd, _, problem = checkpoint_command(sid, getattr(args, "dir", None))
 
     print("\nSession retirement checklist\n")
     print("1. Checkpoint. Pipe your understanding into this command - not the Write")
     print("   tool, which bypasses the credential scan and the per-session blocks:\n")
-    print("     python3 %s write-progress --dir %s --session %s\n"
-          % (shlex.quote(str(Path(__file__).resolve())), target, sid))
-    if not root:
-        print("   The project directory could not be determined (%s), so pass it.\n" % why)
+    if cmd:
+        print("     %s\n" % cmd)
+    else:
+        print("     python3 %s write-progress --dir <project directory> --session %s\n"
+              % (shlex.quote(str(Path(__file__).resolve())), sid))
+        print("   The project directory could not be determined (%s), so pass it.\n" % problem)
     print("2. Save anything the checkpoint does not cover: open questions, half-finished")
     print("   edits, links you will want again.")
     print("3. Start a fresh session and point it at the checkpoint file.")
@@ -1350,9 +1403,16 @@ def main():
                                          "current session's")
     st.set_defaults(func=cmd_status)
 
+    cp = sub.add_parser("checkpoint", help="print the ready-to-run command for saving "
+                                           "this session's progress")
+    cp.add_argument("--dir", help="project directory, when it cannot be inferred")
+    cp.set_defaults(func=cmd_checkpoint)
+
     sub.add_parser("scan", help="scan every session and rank them").set_defaults(func=cmd_scan)
     sub.add_parser("doctor", help="self check: runtime, wiring, heartbeat, format").set_defaults(func=cmd_doctor)
-    sub.add_parser("retire", help="print the session retirement checklist").set_defaults(func=cmd_retire)
+    rt = sub.add_parser("retire", help="print the session retirement checklist")
+    rt.add_argument("--dir", help="project directory, when it cannot be inferred")
+    rt.set_defaults(func=cmd_retire)
 
     w = sub.add_parser("write-progress",
                        help="write this session's progress block, body read from stdin")
