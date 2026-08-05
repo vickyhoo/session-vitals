@@ -207,6 +207,7 @@ Turn it off, and the plugin makes no network requests whatsoever:
 
 | Command | Purpose |
 |---|---|
+| `/session-vitals:status` | Report on **this** session: what has been summarized away, whether it has a checkpoint, what to do next |
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
 | `/session-vitals:retire` | Print a ready-to-run checkpoint command and the handoff steps |
@@ -272,6 +273,7 @@ Underneath the hooks it is just subcommands, so anything can call it:
 
 ```bash
 python3 vitals.py hook precompact   # JSON on stdin, needs transcript_path
+python3 vitals.py status            # one session; --transcript to pick which
 python3 vitals.py scan
 python3 vitals.py doctor
 ```
@@ -286,7 +288,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-58 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+63 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

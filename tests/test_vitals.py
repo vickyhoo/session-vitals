@@ -495,6 +495,67 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Single-session report ───────────────────────────────────────────────────
+
+class TestSessionReport(unittest.TestCase):
+    """
+    `scan` ranks every session; this answers the three questions worth asking about the
+    one you are in: how much has been summarized away, whether this session has left a
+    checkpoint anyone could pick up, and whether the hooks meant to do that are running.
+    """
+
+    def report(self, transcript, sid, cfg):
+        saved = vitals.load_config
+        try:
+            vitals.load_config = lambda: cfg
+            return vitals.session_report(transcript, sid)
+        finally:
+            vitals.load_config = saved
+
+    def test_notices_this_session_has_no_block(self):
+        """The distinction that matters: a file exists, but nothing here would survive."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            (root / "PROGRESS.md").write_text(
+                "<!-- session-vitals:someone-else -->\nold\n", encoding="utf-8")
+            with Fx([json.dumps({"cwd": str(root)}), compact("a")]) as p:
+                r = self.report(p, "mine", {"progress_md": {"enabled": True,
+                                                            "filename": "PROGRESS.md"}})
+        self.assertEqual(r["checkpoint"]["blocks"], 1)
+        self.assertFalse(r["checkpoint"]["mine"])
+
+    def test_recognizes_its_own_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            (root / "PROGRESS.md").write_text(
+                "<!-- session-vitals:mine -->\nnotes\n<!-- /session-vitals:mine -->\n",
+                encoding="utf-8")
+            with Fx([json.dumps({"cwd": str(root)}), compact("a")]) as p:
+                r = self.report(p, "mine", {"progress_md": {"enabled": True,
+                                                            "filename": "PROGRESS.md"}})
+        self.assertTrue(r["checkpoint"]["mine"])
+
+    def test_reports_no_project_rather_than_no_file(self):
+        """
+        An undetermined directory is not evidence the file is missing. Saying "no
+        PROGRESS.md" there would send someone looking for a problem that isn't one.
+        """
+        with Fx([json.dumps({"cwd": str(Path.home())}), compact("a")]) as p:
+            r = self.report(p, "mine", {"progress_md": {"enabled": True}})
+        self.assertIsNone(r["checkpoint"]["project"])
+        self.assertIsNone(r["checkpoint"]["path"])
+        self.assertIsNotNone(r["checkpoint"]["project_problem"])
+
+    def test_unreadable_transcript(self):
+        self.assertIsNone(vitals.session_report("/nonexistent.jsonl", "s1"))
+
+    def test_compaction_count_reads_naturally(self):
+        self.assertEqual(vitals._times(1), "once")
+        self.assertEqual(vitals._times(9), "9 times")
+
+
 # ── Reading the checkpoint back ─────────────────────────────────────────────
 
 class TestProgressPointer(unittest.TestCase):

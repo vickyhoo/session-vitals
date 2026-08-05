@@ -415,17 +415,21 @@ def metrics(sc, pending=0):
 LEVELS = ["ok", "warn", "crit"]
 
 
+def _times(n):
+    return "once" if n == 1 else "%d times" % n
+
+
 def grade(m):
     """
     Two steps. Compaction count alone sets the base level; independent signals then
     escalate it. Adding a signal means adding one modifier, not re-deriving a decision tree.
     """
     if m["layers"] >= CRIT_LAYERS:
-        level, base = "crit", "compacted %d times" % m["layers"]
+        level, base = "crit", "compacted %s" % _times(m["layers"])
     elif m["layers"] >= WARN_LAYERS:
-        level, base = "warn", "compacted %d times" % m["layers"]
+        level, base = "warn", "compacted %s" % _times(m["layers"])
     else:
-        level, base = "ok", "compacted %d times" % m["layers"]
+        level, base = "ok", "compacted %s" % _times(m["layers"])
 
     modifiers = []
     if m["rapid"]:
@@ -962,6 +966,116 @@ def cmd_hook(args):
     sys.exit(0)
 
 
+def session_report(transcript, sid):
+    """
+    Everything known about one session, as data. Separated from printing so the
+    numbers can be tested without matching against formatted text.
+    """
+    sc = scan(transcript)
+    if not sc:
+        return None
+    m = metrics(sc)
+    level, base, mods = grade(m)
+    cfg = load_config()
+    opts = cfg.get("progress_md", {})
+
+    checkpoint = {"enabled": bool(opts.get("enabled")), "path": None,
+                  "blocks": 0, "mine": False}
+    root, why = workspace_root(transcript)
+    checkpoint["project"] = str(root) if root else None
+    checkpoint["project_problem"] = None if root else why
+    if root:
+        f = root / opts.get("filename", "PROGRESS.md")
+        if f.is_file():
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            checkpoint["path"] = str(f)
+            checkpoint["blocks"] = text.count("<!-- session-vitals:")
+            key = re.sub(r"[^A-Za-z0-9_\-]", "", sid or "")[:32]
+            checkpoint["mine"] = bool(key) and ("session-vitals:%s " % key) in text
+
+    return {"metrics": m, "level": level, "base": base, "modifiers": mods,
+            "checkpoint": checkpoint,
+            "wired": bool(sid) and sid in (_read_state().get("sessions") or {})}
+
+
+def cmd_status(args):
+    """
+    One session, in detail - the counterpart to `scan`, which ranks all of them.
+
+    Built around the three questions actually worth asking mid-session: how much has
+    already been summarized away, whether this session has left a checkpoint anyone
+    can pick up, and whether the hooks that are supposed to do that are even running.
+    """
+    if args.transcript:
+        # An explicit transcript means "report on that session", so its id has to come
+        # from the file name too. Reading it from the environment would silently answer
+        # "has this session written a checkpoint" about a different session entirely.
+        transcript = args.transcript
+        sid = Path(transcript).stem
+    else:
+        transcript = current_transcript()
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not transcript:
+        print("\nCannot identify this session: CLAUDE_CODE_SESSION_ID is unset and no "
+              "--transcript was given.\n")
+        return
+    r = session_report(transcript, sid)
+    if not r:
+        print("\nCannot read the transcript: %s\n" % transcript)
+        return
+
+    m, cp = r["metrics"], r["checkpoint"]
+    icon = {"crit": "🔴", "warn": "🟡", "ok": "🟢"}[r["level"]]
+    print("\n%s This session - %s%s\n"
+          % (icon, r["base"], "; " + "; ".join(r["modifiers"]) if r["modifiers"] else ""))
+
+    print("  transcript     %.1f MB, %s lines" % (m["total_bytes"] / 1048576,
+                                                  "{:,}".format(m["total_lines"])))
+    print("  summarized     %s characters of conversation condensed into summaries"
+          % "{:,}".format(m["summarized_chars"]))
+    if m["duplicates"]:
+        print("                 (%d replayed record(s) from resume/fork, not counted)"
+              % m["duplicates"])
+    print("  since last     %.1f MB has accumulated since the last compaction"
+          % (m["tail_bytes"] / 1048576))
+    if m["min_gap"] is not None:
+        print("  tightest gap   %.1f MB between two compactions" % (m["min_gap"] / 1048576))
+    print("  project        %s" % (cp["project"] or "undetermined (%s)" % cp["project_problem"]))
+
+    if not cp["enabled"]:
+        print("  checkpoint     PROGRESS.md is disabled; nothing is being written")
+    elif not cp["project"]:
+        print("  checkpoint     cannot tell - the project directory is undetermined")
+    elif not cp["path"]:
+        print("  checkpoint     no PROGRESS.md yet - nothing would survive this session")
+    elif cp["mine"]:
+        print("  checkpoint     %s, %d block(s), including this session's" % (cp["path"], cp["blocks"]))
+    else:
+        print("  checkpoint     %s, %d block(s), but NONE from this session"
+              % (cp["path"], cp["blocks"]))
+    if not r["wired"]:
+        print("  hooks          not running in this session - it likely started before "
+              "session-vitals was installed, so nothing here is automatic")
+
+    # Advice, most urgent first. Silence is a valid answer: a healthy session with a
+    # current checkpoint needs no instruction, and inventing one trains people to skim.
+    todo = []
+    if not r["wired"]:
+        todo.append("restart the session to pick the hooks up")
+    stale = cp["enabled"] and cp["project"] and not cp["mine"]
+    if stale and r["level"] == "crit":
+        todo.append("checkpoint and start a fresh session: /session-vitals:retire")
+    elif stale:
+        todo.append("write a checkpoint: /session-vitals:retire")
+    elif r["level"] != "ok":
+        todo.append(advice(r["level"]))
+    print("\n%s\n" % ("\n".join("  -> " + t for t in todo) if todo
+                      else "  Nothing to do."))
+
+
 def cmd_scan(args):
     root = Path.home() / ".claude" / "projects"
     files = [f for f in root.rglob("*.jsonl") if "subagents" not in f.parts]
@@ -1230,6 +1344,11 @@ def main():
     h = sub.add_parser("hook", help="invoked by Claude Code hooks")
     h.add_argument("event", choices=["precompact", "postcompact", "sessionstart", "pretooluse"])
     h.set_defaults(func=cmd_hook)
+
+    st = sub.add_parser("status", help="report on the current session in detail")
+    st.add_argument("--transcript", help="inspect this transcript instead of the "
+                                         "current session's")
+    st.set_defaults(func=cmd_status)
 
     sub.add_parser("scan", help="scan every session and rank them").set_defaults(func=cmd_scan)
     sub.add_parser("doctor", help="self check: runtime, wiring, heartbeat, format").set_defaults(func=cmd_doctor)
