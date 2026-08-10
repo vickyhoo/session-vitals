@@ -95,8 +95,17 @@ dump; a summary worth reading has to come from the model that was actually there
 file format follows the [Cline Memory Bank](https://docs.cline.bot/prompting/cline-memory-bank)
 conventions.
 
-**This is off by default**, because it writes into your project directory and that file
-will probably end up committed. Once enabled there are five safeguards: a credential
+**Nothing is created for you.** `enabled` is one global switch, so if compaction could
+create the file, flipping it once would drop a `PROGRESS.md` into every repository a
+compaction happened to occur in - including one you entered for ten minutes to read a log.
+
+**The file's existence is the per-project opt-in.** Create it once with
+`/session-vitals:checkpoint`, and from then on compaction keeps it current. Projects
+without one stay untouched no matter how often they compact, which is the right default
+for throwaway sessions.
+
+**And the whole feature is off by default**, because it writes into your project directory
+and that file will probably end up committed. Once enabled there are five safeguards: a credential
 scan before every write (a hit aborts the whole write), a total size limit, per-session
 blocks so concurrent sessions never clobber each other, an exclusive file lock, and a
 refusal to write into a home directory.
@@ -126,6 +135,12 @@ available - the one moment it is worth trusting, since nothing has moved yet. On
 
 ```json
 { "progress_md": { "inject": false } }
+```
+
+To keep writing checkpoints by hand but never have compaction update them:
+
+```json
+{ "progress_md": { "auto_update": false } }
 ```
 
 **You do not need to mention it in `CLAUDE.md`.** That works, but it costs context in
@@ -298,7 +313,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-68 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+71 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

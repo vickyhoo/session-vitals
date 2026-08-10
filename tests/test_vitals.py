@@ -427,10 +427,20 @@ class TestHookOutput(unittest.TestCase):
         self.assertIsNone(self.run_hook(vitals.hook_postcompact, {"session_id": "s1"},
                                         self.ENABLED))
 
+    def opted_in_project(self, d):
+        """A project that has already accepted a PROGRESS.md, plus its transcript."""
+        root = Path(d) / "proj"
+        (root / ".git").mkdir(parents=True)
+        (root / "PROGRESS.md").write_text("# Project progress\n", encoding="utf-8")
+        return root
+
     def test_compact_start_carries_the_checkpoint_prompt(self):
-        out = self.run_hook(vitals.hook_sessionstart,
-                            {"session_id": "s1", "source": "compact",
-                             "transcript_path": "/nonexistent.jsonl"}, self.ENABLED)
+        with tempfile.TemporaryDirectory() as d:
+            root = self.opted_in_project(d)
+            with Fx([json.dumps({"cwd": str(root)})]) as p:
+                out = self.run_hook(vitals.hook_sessionstart,
+                                    {"session_id": "s1", "source": "compact",
+                                     "transcript_path": p}, self.ENABLED)
         hso = out["hookSpecificOutput"]
         self.assertEqual(hso["hookEventName"], "SessionStart")
         self.assertIn("write-progress", hso["additionalContext"])
@@ -441,9 +451,12 @@ class TestHookOutput(unittest.TestCase):
         expanded to "/vitals.py" and failed the moment a real session tried to obey:
         "can't open file '/vitals.py'". The path has to be absolute and already resolved.
         """
-        out = self.run_hook(vitals.hook_sessionstart,
-                            {"session_id": "s1", "source": "compact",
-                             "transcript_path": "/nonexistent.jsonl"}, self.ENABLED)
+        with tempfile.TemporaryDirectory() as d:
+            root = self.opted_in_project(d)
+            with Fx([json.dumps({"cwd": str(root)})]) as p:
+                out = self.run_hook(vitals.hook_sessionstart,
+                                    {"session_id": "s1", "source": "compact",
+                                     "transcript_path": p}, self.ENABLED)
         ctx = out["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("CLAUDE_PLUGIN_ROOT", ctx)
         self.assertIn(str(Path(vitals.__file__).resolve()), ctx)
@@ -454,6 +467,45 @@ class TestHookOutput(unittest.TestCase):
                 vitals.hook_sessionstart,
                 {"session_id": "s1", "source": source,
                  "transcript_path": "/nonexistent.jsonl"}, self.ENABLED), source)
+
+    def test_compaction_will_not_create_the_file(self):
+        """
+        `enabled` is one global switch. If compaction could create the file, flipping it
+        once would drop a PROGRESS.md into every repository a compaction happened to
+        occur in, including one entered for ten minutes to read a log.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            with Fx([json.dumps({"cwd": str(root)})]) as p:
+                payload = {"session_id": "s1", "source": "compact", "transcript_path": p}
+                self.assertIsNone(self.run_hook(vitals.hook_sessionstart, payload,
+                                                self.ENABLED))
+                # The file's existence is this project's opt-in.
+                (root / "PROGRESS.md").write_text("# Project progress\n", encoding="utf-8")
+                out = self.run_hook(vitals.hook_sessionstart, payload, self.ENABLED)
+        self.assertIn("write-progress", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_unresolvable_directory_stays_silent(self):
+        """
+        Without a directory there is no way to check whether the project opted in, and
+        asking the model to name one would route around the check entirely.
+        """
+        out = self.run_hook(vitals.hook_sessionstart,
+                            {"session_id": "s1", "source": "compact",
+                             "transcript_path": "/nonexistent.jsonl"}, self.ENABLED)
+        self.assertIsNone(out)
+
+    def test_auto_update_can_be_turned_off(self):
+        cfg = {"progress_md": dict(self.ENABLED["progress_md"], auto_update=False)}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "proj"
+            (root / ".git").mkdir(parents=True)
+            (root / "PROGRESS.md").write_text("# Project progress\n", encoding="utf-8")
+            with Fx([json.dumps({"cwd": str(root)})]) as p:
+                self.assertIsNone(self.run_hook(
+                    vitals.hook_sessionstart,
+                    {"session_id": "s1", "source": "compact", "transcript_path": p}, cfg))
 
     def test_disabled_config_suppresses_it(self):
         self.assertIsNone(self.run_hook(

@@ -839,11 +839,19 @@ def progress_instruction(payload):
     and still has a full turn for tool calls. Mechanical extraction only produces a
     transcript dump; what actually matters (where things stand, why, what is next) only
     the model can articulate.
+
+    It never creates the file. `enabled` is a single global switch, and letting it create
+    files meant one flip put a new PROGRESS.md into every repository a compaction happened
+    to occur in - including the ones entered for ten minutes to read a log. The file's
+    existence is the per-project consent instead: create it once with
+    /session-vitals:checkpoint, and from then on compaction keeps it current.
     """
     if (payload.get("source") or "") != "compact":
         return None
     cfg = load_config()
     if not cfg.get("progress_md", {}).get("enabled"):
+        return None
+    if cfg["progress_md"].get("auto_update") is False:
         return None
     fname = cfg["progress_md"].get("filename", "PROGRESS.md")
     sid = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
@@ -857,15 +865,16 @@ def progress_instruction(payload):
     # first time a real session tried to follow these instructions.
     me = shlex.quote(str(Path(__file__).resolve()))
     root, why = workspace_root(payload.get("transcript_path"))
+    if root and not (root / fname).is_file():
+        return None          # this project has not opted in; do not create the file
     if root:
         where = ("  python3 %s write-progress --dir %s --session %s\n\nThat directory "
                  "was derived from every working directory this session used. Override it "
                  "only if you know it is wrong." % (me, shlex.quote(str(root)), sid))
     else:
-        where = ("  python3 %s write-progress --dir <project directory> --session %s\n\n"
-                 "The directory could not be determined (%s), so pass the one this session "
-                 "is actually working on. The current shell directory is not reliable."
-                 % (me, sid, why))
+        # Without a resolved directory there is no way to tell whether this project ever
+        # opted in, and asking the model to name one would route around that check.
+        return None
 
     # Route the write through our own command rather than letting the model use the
     # Write tool directly. Everything that makes this safe (credential scan, size cap,

@@ -94,7 +94,7 @@ order of magnitude, and the caching design they justified was dropped.
 | D6 | Grade as base level plus modifiers | The original implementation entangled layer count with the rapid-compaction signal; adding a threshold meant re-deriving the whole decision tree |
 | D7 | Descriptive metric, no causal claim | See the measurements above |
 | D8 | Let the current model write the progress note | Mechanical extraction only yields a transcript dump. Calling Claude recursively from a hook adds reentrancy, latency and cost. `additionalContext` reaches the model that already holds the context |
-| D9 | Full persistence contract for PROGRESS.md | Opt-in, credential scan before write, size limit, gitignore guidance, per-session blocks |
+| D9 | Full persistence contract for PROGRESS.md | Opt-in, credential scan before write, size limit, gitignore guidance, per-session blocks. **Amended 2026-08-10:** compaction updates the file but never creates it - `enabled` is one global switch, and letting it create files meant one flip seeded a PROGRESS.md into every repository that happened to compact. The file's existence is the per-project consent |
 | D10 | `retire` never touches transcript files | Archiving a file the running process still writes can break the session, and it contradicted the stated reason E4 was deferred |
 | D11 | Declare the Python 3.8+ dependency rather than remove it | See below |
 

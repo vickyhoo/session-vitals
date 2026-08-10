@@ -35,3 +35,7 @@ substitute the Write tool and do not improvise another way to record it.
 This replaces the block if this session already wrote one, so running it repeatedly is
 safe and is the intended use - checkpoint whenever a decision settles, not only at the
 end. To checkpoint *and* hand off to a fresh session, use `/session-vitals:retire`.
+
+If the project has no PROGRESS.md yet, this is what creates it - and creating it is what
+opts the project into automatic updates after each compaction. Say so once, plainly, the
+first time: it is a new file in their repository that will probably get committed.
