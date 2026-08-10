@@ -441,10 +441,14 @@ def grade(m):
     if m["parse_failures"]:
         modifiers.append("%d line(s) failed to parse" % m["parse_failures"])
 
-    # Each qualifying signal bumps one level, capped at crit.
-    bump = sum(1 for k in ("rapid", "format_suspect") if m.get(k))
-    if bump:
-        level = LEVELS[min(LEVELS.index(level) + 1, len(LEVELS) - 1)]
+    # Each escalating signal bumps one level, capped at crit. Only these two escalate:
+    # a tight gap says compaction is happening faster than work is getting done, and a
+    # missing marker says the numbers cannot be trusted at all. The other modifiers are
+    # reported but do not escalate - a large tail only means the session is busy, and a
+    # failed line is usually a half-written record caught mid-flush.
+    for signal in ("rapid", "format_suspect"):
+        if m.get(signal):
+            level = LEVELS[min(LEVELS.index(level) + 1, len(LEVELS) - 1)]
 
     return level, base, modifiers
 

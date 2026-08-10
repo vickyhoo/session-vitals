@@ -88,7 +88,7 @@ order of magnitude, and the caching design they justified was dropped.
 | # | Decision | Rationale |
 |---|---|---|
 | D2 | Single-file `vitals.py` with argparse subcommands | Claude Code executes hook scripts directly, so cross-file imports do not resolve. One file eliminates an entire class of silent failure and satisfies DRY by construction |
-| D3 | Detect platform; disable approval off macOS and say so in `doctor` | `osascript` is macOS only. Fail-closed on a platform with no dialog implementation becomes denial of service |
+| D3 | Detect platform; disable macOS-only features elsewhere and say so in `doctor` | `osascript` is macOS only. **Superseded in part:** the approval dialog this was written for is gone (see below); the rule still governs desktop notifications |
 | D4 | Hand-written minimal fixtures, never real transcripts | Real transcripts hold full conversations, project paths and possibly credentials. The counting logic only needs fields and offsets |
 | D5 | Full distribution this cycle | Without an explicit `version`, the git commit SHA becomes the version and every push ships an "update" to users |
 | D6 | Grade as base level plus modifiers | The original implementation entangled layer count with the rapid-compaction signal; adding a threshold meant re-deriving the whole decision tree |
@@ -187,7 +187,8 @@ Eight findings, all addressed:
 4. No semantic extraction mechanism -> D8
 5. No safe persistence contract -> D9
 6. Regex approval is trivially bypassable via variables, aliases, `eval`, `sh -c` -> the
-   README states plainly that it is a speed bump, not a security boundary
+   README stated plainly that it was a speed bump, not a security boundary. That was the
+   right disclosure and the wrong resolution; the feature was removed later (see below)
 7. `retire` unsafe and contradicts E4's deferral rationale -> D10
 8. Documentation inconsistent with the single-file decision -> this document
 
@@ -196,13 +197,13 @@ Eight findings, all addressed:
 - `session-health.py` (215 lines) and `worklog.py` (155 lines), both verified working,
   became the raw material for `vitals.py` rather than being rewritten
 - The Swift bridge's danger-pattern table and fallback logic were ported into Python;
-  the Swift tree was then deleted
+  the Swift tree was then deleted. The ported table is gone too - see the removal note
 
 ## Not in scope
 
 - E1 notch integration, E4 trends and archival - see TODOS.md
-- Dialog implementations for Linux and Windows: approval disables itself instead,
-  because those implementations could not be verified on available hardware
+- Dialog implementations for Linux and Windows: moot since the approval gate was
+  removed. Desktop notifications remain macOS-only and simply skip elsewhere
 - A causal verification experiment: a single machine lacks the sample size
 
 ## Measured baseline

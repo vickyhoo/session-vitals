@@ -57,9 +57,13 @@ conversation has been summarized away.
 | 3-5 | Suggests a checkpoint |
 | 6+ | Suggests starting a fresh session |
 
-Three signals each escalate one level: gaps under 512KB, more than 4MB piled up since
-the last compaction, and no compaction markers found at all (which means Claude Code's
-transcript format may have changed and the numbers cannot be trusted).
+Two signals each escalate one level: a gap under 512KB between compactions, and no
+compaction markers found at all in a large transcript, which means Claude Code's format
+may have changed and the numbers cannot be trusted.
+
+Two more are reported without escalating: more than 4MB piled up since the last
+compaction, which only means the session is busy, and lines that failed to parse, which
+are usually records caught mid-flush.
 
 **Be clear about what this metric supports:**
 
@@ -92,10 +96,10 @@ file format follows the [Cline Memory Bank](https://docs.cline.bot/prompting/cli
 conventions.
 
 **This is off by default**, because it writes into your project directory and that file
-will probably end up committed. Once enabled there are four safeguards: a credential
+will probably end up committed. Once enabled there are five safeguards: a credential
 scan before every write (a hit aborts the whole write), a total size limit, per-session
-blocks so concurrent sessions never clobber each other, and a refusal to write into a
-home directory.
+blocks so concurrent sessions never clobber each other, an exclusive file lock, and a
+refusal to write into a home directory.
 
 Enable it in `~/.session-vitals/config.json`:
 
@@ -214,7 +218,7 @@ Turn it off, and the plugin makes no network requests whatsoever:
 |---|---|
 | `/session-vitals:status` | Report on **this** session: what has been summarized away, whether it has a checkpoint, what to do next |
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
-| `/session-vitals:doctor` | Self check: runtime, hook wiring, heartbeat, transcript format |
+| `/session-vitals:doctor` | Self check: runtime, which copy is running, version, heartbeats, whether hooks are live in this session, transcript format |
 | `/session-vitals:checkpoint` | Save what this session concluded into `PROGRESS.md`, without ending it |
 | `/session-vitals:retire` | Print a ready-to-run checkpoint command and the handoff steps |
 | `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
@@ -294,7 +298,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-66 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+68 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

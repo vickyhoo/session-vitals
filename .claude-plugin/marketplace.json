@@ -16,7 +16,7 @@
         "session",
         "context",
         "compaction",
-        "safety"
+        "checkpoint"
       ],
       "author": {
         "name": "vickyhoo"

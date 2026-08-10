@@ -147,6 +147,19 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(self.g(1, rapid=2), "warn")   # ok   -> warn
         self.assertEqual(self.g(3, rapid=1), "crit")   # warn -> crit
 
+    def test_each_escalating_signal_bumps_once(self):
+        """Two signals, two levels. The code used to bump once no matter how many fired."""
+        self.assertEqual(self.g(0, rapid=1), "warn")
+        self.assertEqual(self.g(0, rapid=1, format_suspect=True), "crit")
+
+    def test_informational_modifiers_do_not_escalate(self):
+        """
+        A large tail only means the session is busy; a failed line is usually a record
+        caught mid-flush. Both are worth reporting and neither is worth a warning.
+        """
+        self.assertEqual(self.g(0, tail_bytes=99 * 1024 * 1024), "ok")
+        self.assertEqual(self.g(0, parse_failures=3), "ok")
+
     def test_format_suspect_escalates_and_speaks(self):
         """A vanished field must make noise. Silently reporting "healthy" is the worst failure."""
         level, _, mods = vitals.grade(

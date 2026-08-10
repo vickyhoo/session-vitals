@@ -7,7 +7,7 @@
     "context",
     "compaction",
     "hooks",
-    "safety"
+    "checkpoint"
   ],
   "author": {
     "name": "vickyhoo",
