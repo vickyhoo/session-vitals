@@ -78,10 +78,55 @@ SECRET_PATTERNS = [
 
 # ── Config and state ────────────────────────────────────────────────────────
 
+# Every setting, in one place. Defaults live here rather than scattered through `.get()`
+# calls so `config` can list them, and so a typo in the config file can be caught: a
+# misspelled key used to be merged in silently and simply never take effect, which is the
+# exact failure mode this project exists to make visible.
+SETTINGS = {
+    "progress_md.enabled": (bool, False,
+                            "Write checkpoints into the project's PROGRESS.md at all"),
+    "progress_md.filename": (str, "PROGRESS.md",
+                             "Name of the checkpoint file inside the project"),
+    "progress_md.max_bytes": (int, 120_000,
+                              "Refuse to write once the whole file would exceed this"),
+    "progress_md.auto_update": (bool, True,
+                                "After a compaction, ask the model to update an existing "
+                                "checkpoint file. Never creates one"),
+    "progress_md.inject": (bool, True,
+                           "Hand the checkpoint file to each new session as background"),
+    "progress_md.inject_max_bytes": (int, 8000,
+                                     "Inline the file below this size; above it, only "
+                                     "announce the path"),
+    "update_check": (bool, True,
+                     "Ask the source repository whether a newer version exists"),
+}
+
+
+def _defaults():
+    out = {}
+    for dotted, (_, default, _help) in SETTINGS.items():
+        head, _, tail = dotted.partition(".")
+        if tail:
+            out.setdefault(head, {})[tail] = default
+        else:
+            out[head] = default
+    return out
+
+
+def unknown_keys(user):
+    """Dotted keys present in a config mapping that nothing will ever read."""
+    known, bad = set(SETTINGS), []
+    for head, value in (user or {}).items():
+        if isinstance(value, dict):
+            bad += ["%s.%s" % (head, k) for k in value
+                    if "%s.%s" % (head, k) not in known]
+        elif head not in known:
+            bad.append(head)
+    return sorted(bad)
+
+
 def load_config():
-    cfg = {
-        "progress_md": {"enabled": False, "max_bytes": 120_000, "filename": "PROGRESS.md"},
-    }
+    cfg = _defaults()
     try:
         with CONFIG_PATH.open("r", encoding="utf-8") as f:
             user = json.load(f)
@@ -1130,6 +1175,107 @@ def cmd_scan(args):
 
 
 
+def _coerce(dotted, raw):
+    """Turn a command-line string into the declared type, or explain why it will not."""
+    typ = SETTINGS[dotted][0]
+    if typ is bool:
+        low = raw.strip().lower()
+        if low in ("true", "yes", "on", "1"):
+            return True, None
+        if low in ("false", "no", "off", "0"):
+            return False, None
+        return None, "%s takes true or false, got %r" % (dotted, raw)
+    if typ is int:
+        try:
+            return int(raw), None
+        except ValueError:
+            return None, "%s takes a number, got %r" % (dotted, raw)
+    return raw, None
+
+
+def _read_user_config():
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_user_config(d):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+    tmp.replace(CONFIG_PATH)
+
+
+def cmd_config(args):
+    """
+    Read and change settings without hand-editing JSON.
+
+    Every key is checked against SETTINGS. An unknown key is an error rather than a
+    silent no-op: hand-editing the file, a plausible-looking typo takes effect never and
+    says nothing, which is the same class of failure as a hook wired to the wrong field.
+    """
+    user, cfg = _read_user_config(), load_config()
+
+    def current(dotted):
+        head, _, tail = dotted.partition(".")
+        return cfg[head][tail] if tail else cfg[head]
+
+    def is_set(dotted):
+        head, _, tail = dotted.partition(".")
+        return tail in user.get(head, {}) if tail else head in user
+
+    if args.action in (None, "list"):
+        print("\nsession-vitals settings   (%s)\n" % CONFIG_PATH)
+        for dotted, (_, default, help_text) in SETTINGS.items():
+            mark = "set " if is_set(dotted) else "    "
+            print("  %s %-30s %s" % (mark, dotted, json.dumps(current(dotted))))
+            print("       %-30s %s" % ("", help_text))
+            if is_set(dotted):
+                print("       %-30s default: %s" % ("", json.dumps(default)))
+        print("\n  'set' marks values you have changed; the rest are defaults.\n")
+        for bad in unknown_keys(user):
+            print("  WARNING: %s is in your config file and is not a setting; "
+                  "nothing reads it" % bad)
+        return
+
+    if args.key not in SETTINGS:
+        sys.stderr.write("unknown setting: %s\nValid settings:\n%s\n"
+                         % (args.key, "\n".join("  " + k for k in SETTINGS)))
+        sys.exit(1)
+
+    if args.action == "get":
+        print(json.dumps(current(args.key)))
+        return
+
+    head, _, tail = args.key.partition(".")
+    if args.action == "unset":
+        if tail:
+            user.get(head, {}).pop(tail, None)
+            if head in user and not user[head]:
+                del user[head]
+        else:
+            user.pop(head, None)
+        _write_user_config(user)
+        print("%s reset to default %s" % (args.key, json.dumps(SETTINGS[args.key][1])))
+        return
+
+    value, problem = _coerce(args.key, args.value)
+    if problem:
+        sys.stderr.write(problem + "\n")
+        sys.exit(1)
+    if tail:
+        user.setdefault(head, {})[tail] = value
+    else:
+        user[head] = value
+    _write_user_config(user)
+    print("%s = %s" % (args.key, json.dumps(value)))
+
+
 def cmd_update_check(args):
     cfg = load_config()
     state, local, remote = check_update(cfg, force=args.force)
@@ -1266,6 +1412,12 @@ def cmd_doctor(args):
         else:
             print("[%s] No compaction markers in the %d largest transcripts - "
                   "the field may have changed and counts will be wrong" % (bad, len(biggest)))
+
+    # A key nothing reads is the config-file version of a hook wired to a field that
+    # does not exist: plausible on the page, inert in practice, silent about it.
+    for stray in unknown_keys(_read_user_config()):
+        print("[%s] %s is in %s but is not a setting; nothing reads it. "
+              "`config` lists the valid ones" % (bad, stray, CONFIG_PATH))
 
     # 5. PROGRESS.md switch
     pm = cfg.get("progress_md", {})
@@ -1410,6 +1562,13 @@ def main():
     h = sub.add_parser("hook", help="invoked by Claude Code hooks")
     h.add_argument("event", choices=["precompact", "postcompact", "sessionstart", "pretooluse"])
     h.set_defaults(func=cmd_hook)
+
+    cf = sub.add_parser("config", help="show or change settings")
+    cf.add_argument("action", nargs="?", choices=["list", "get", "set", "unset"],
+                    default="list")
+    cf.add_argument("key", nargs="?", help="dotted setting name, e.g. progress_md.enabled")
+    cf.add_argument("value", nargs="?", help="new value, for `set`")
+    cf.set_defaults(func=cmd_config)
 
     st = sub.add_parser("status", help="report on the current session in detail")
     st.add_argument("--transcript", help="inspect this transcript instead of the "

@@ -110,13 +110,17 @@ scan before every write (a hit aborts the whole write), a total size limit, per-
 blocks so concurrent sessions never clobber each other, an exclusive file lock, and a
 refusal to write into a home directory.
 
-Enable it in `~/.session-vitals/config.json`:
+Turn it on with:
 
-```json
-{
-  "progress_md": { "enabled": true, "max_bytes": 120000, "filename": "PROGRESS.md" }
-}
+```bash
+/session-vitals:config set progress_md.enabled true
 ```
+
+`/session-vitals:config` lists every setting, what it does, and which ones you have
+changed. Prefer it over editing `~/.session-vitals/config.json` by hand: it checks the
+key against the known settings and coerces the value to the declared type, where a
+hand-written typo takes effect never and says nothing. `doctor` flags stray keys already
+in the file for the same reason.
 
 #### Reading it back
 
@@ -133,14 +137,14 @@ At `startup` the transcript is empty, so the launch directory is the only signal
 available - the one moment it is worth trusting, since nothing has moved yet. On
 `resume` the usual resolution applies. Both are tried, best evidence first.
 
-```json
-{ "progress_md": { "inject": false } }
+```bash
+/session-vitals:config set progress_md.inject false
 ```
 
 To keep writing checkpoints by hand but never have compaction update them:
 
-```json
-{ "progress_md": { "auto_update": false } }
+```bash
+/session-vitals:config set progress_md.auto_update false
 ```
 
 **You do not need to mention it in `CLAUDE.md`.** That works, but it costs context in
@@ -223,14 +227,15 @@ python3 vitals.py update-check --snooze   # remind me later
 
 Turn it off, and the plugin makes no network requests whatsoever:
 
-```json
-{ "update_check": false }
+```bash
+/session-vitals:config set update_check false
 ```
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
+| `/session-vitals:config` | Show or change settings, with the valid keys and what each does |
 | `/session-vitals:status` | Report on **this** session: what has been summarized away, whether it has a checkpoint, what to do next |
 | `/session-vitals:scan` | Scan every session, ranked by compaction count |
 | `/session-vitals:doctor` | Self check: runtime, which copy is running, version, heartbeats, whether hooks are live in this session, transcript format |
@@ -313,7 +318,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-71 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+77 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

@@ -408,17 +408,20 @@ class TestHookOutput(unittest.TestCase):
                                "filename": "PROGRESS.md"}}
 
     def run_hook(self, fn, payload, cfg=None):
-        saved = (vitals.load_config, vitals.notify, vitals.beat)
+        saved = (vitals.load_config, vitals.notify, vitals.beat,
+                 vitals.spawn_update_refresh)
         buf = io.StringIO()
         try:
             if cfg is not None:
                 vitals.load_config = lambda: cfg
             vitals.notify = lambda *a, **k: None   # no desktop popups during tests
             vitals.beat = lambda *a, **k: None     # never touch the real state file
+            vitals.spawn_update_refresh = lambda: None   # no background network calls
             with redirect_stdout(buf):
                 fn(payload)
         finally:
-            vitals.load_config, vitals.notify, vitals.beat = saved
+            (vitals.load_config, vitals.notify, vitals.beat,
+             vitals.spawn_update_refresh) = saved
         text = buf.getvalue()
         return json.loads(text) if text.strip() else None
 
@@ -558,6 +561,69 @@ class TestHeartbeat(unittest.TestCase):
         for i in range(vitals.SESSION_MEMORY + 5):
             vitals.beat("PreToolUse", "sess-%03d" % i)
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
+
+
+# ── Settings ────────────────────────────────────────────────────────────────
+
+class TestSettings(unittest.TestCase):
+    """
+    A misspelled config key used to be merged in and simply never take effect - the same
+    silent failure as a hook reading a field that does not exist, which is the thing this
+    project was built to catch. Keys are now declared, so a typo can be reported.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (vitals.STATE_DIR, vitals.CONFIG_PATH)
+        vitals.STATE_DIR = Path(self.tmp.name)
+        vitals.CONFIG_PATH = vitals.STATE_DIR / "config.json"
+
+    def tearDown(self):
+        vitals.STATE_DIR, vitals.CONFIG_PATH = self.saved
+        self.tmp.cleanup()
+
+    def test_defaults_cover_every_declared_setting(self):
+        """Defaults are declared once. Two sources of truth is how they drift apart."""
+        cfg = vitals.load_config()
+        for dotted, (_, default, _h) in vitals.SETTINGS.items():
+            head, _, tail = dotted.partition(".")
+            got = cfg[head][tail] if tail else cfg[head]
+            self.assertEqual(got, default, dotted)
+
+    def test_unknown_keys_are_reported(self):
+        bad = vitals.unknown_keys({"progress_md": {"enabld": True}, "updat_check": False})
+        self.assertEqual(bad, ["progress_md.enabld", "updat_check"])
+
+    def test_known_keys_are_not_reported(self):
+        self.assertEqual(vitals.unknown_keys(
+            {"progress_md": {"enabled": True}, "update_check": False}), [])
+
+    def test_values_are_coerced_to_the_declared_type(self):
+        self.assertEqual(vitals._coerce("progress_md.enabled", "yes"), (True, None))
+        self.assertEqual(vitals._coerce("progress_md.enabled", "off"), (False, None))
+        self.assertEqual(vitals._coerce("progress_md.max_bytes", "500"), (500, None))
+
+    def test_bad_values_are_refused_with_a_reason(self):
+        for key, raw in (("progress_md.enabled", "maybe"),
+                         ("progress_md.max_bytes", "lots")):
+            value, problem = vitals._coerce(key, raw)
+            self.assertIsNone(value)
+            self.assertIn(key, problem)
+
+    def test_set_then_unset_round_trips(self):
+        vitals._write_user_config({})
+        args = type("A", (), {})()
+        args.action, args.key, args.value = "set", "progress_md.max_bytes", "999"
+        with redirect_stdout(io.StringIO()):
+            vitals.cmd_config(args)
+        self.assertEqual(vitals.load_config()["progress_md"]["max_bytes"], 999)
+        args.action = "unset"
+        with redirect_stdout(io.StringIO()):
+            vitals.cmd_config(args)
+        self.assertEqual(vitals.load_config()["progress_md"]["max_bytes"],
+                         vitals.SETTINGS["progress_md.max_bytes"][1])
+        # The emptied section goes too, rather than leaving `{"progress_md": {}}` behind.
+        self.assertEqual(json.loads(vitals.CONFIG_PATH.read_text(encoding="utf-8")), {})
 
 
 # ── Checkpoint command line ─────────────────────────────────────────────────
