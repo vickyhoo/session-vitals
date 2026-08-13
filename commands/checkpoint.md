@@ -1,6 +1,6 @@
 ---
 description: Save what this session has concluded into the project's PROGRESS.md, without ending the session
-argument-hint: [what to emphasize, e.g. "the deploy pipeline decisions"]
+argument-hint: "[what to emphasize, e.g. the deploy pipeline decisions]"
 ---
 
 $ARGUMENTS

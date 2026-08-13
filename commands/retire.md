@@ -1,6 +1,6 @@
 ---
 description: Capture the current session's progress and print the steps to continue in a fresh session
-argument-hint: [anything that must not be lost, e.g. "why we abandoned the mirror fix"]
+argument-hint: "[anything that must not be lost]"
 ---
 
 $ARGUMENTS

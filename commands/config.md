@@ -1,6 +1,6 @@
 ---
 description: Show or change session-vitals settings
-argument-hint: [set|get|unset] [key] [value]
+argument-hint: "[set|get|unset] [key] [value]"
 ---
 
 $ARGUMENTS

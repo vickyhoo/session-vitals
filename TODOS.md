@@ -110,6 +110,35 @@ writes. `doctor` now prints which file runs and flags a differing registered cop
 
 ---
 
+## Releasing
+
+Distribution is decided by one string. `claude plugin update` compares the `version` in
+`.claude-plugin/plugin.json` on the default branch and nothing else - the docs are
+explicit: "the plugin is pinned to this string and users only receive updates when it
+changes." Demonstrated on this machine: with the version left at 1.0.0, `update` answered
+"already at the latest version" for a copy seven commits behind.
+
+So the release checklist is short, and every item exists because something failed:
+
+1. **Bump the version.** In `plugin.json`, `marketplace.json`, and `vitals.py`. A test
+   asserts all three agree; hand-syncing three copies is a matter of time.
+2. **`claude plugin validate .`** It parses every command's frontmatter. A malformed
+   block is dropped whole - `description` included - and the command still loads,
+   anonymous. `argument-hint: [set|get|unset]` did that: `|` opens a YAML block scalar.
+   A test now guards the same shape, but validate sees things the test does not.
+3. **Push to `main`.** The marketplace source is this repo's default branch and the
+   plugin source is `"./"`, so main *is* the release line.
+4. **`claude plugin tag --push`** to mark it. The tag also cross-checks that
+   `plugin.json` and the marketplace entry agree before it will run.
+
+A `dev` branch is optional and does not address the failure that actually occurred, which
+was forgetting to bump rather than releasing too eagerly. If main should be free to move
+without shipping, the structural change is to give the plugin entry an explicit `github`
+source with `ref` or `sha` pointing at a tag, instead of `"./"`; then main and the release
+line separate properly. Not worth it for a single-maintainer repo.
+
+---
+
 ## Verification experiment (not scheduled)
 
 Correlate compaction count against actual output quality, to establish whether the

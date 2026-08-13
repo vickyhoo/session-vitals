@@ -614,6 +614,46 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Release consistency ─────────────────────────────────────────────────────
+
+class TestManifests(unittest.TestCase):
+    """
+    Distribution is decided entirely by the version string: `plugin update` compares it
+    and nothing else, so a release that forgets to move it silently ships nothing. It is
+    written in three files, and hand-syncing three copies is a matter of time.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def manifest(self, name):
+        return json.loads((self.ROOT / ".claude-plugin" / name).read_text(encoding="utf-8"))
+
+    def test_all_three_versions_agree(self):
+        plugin = self.manifest("plugin.json")["version"]
+        market = self.manifest("marketplace.json")["plugins"][0]["version"]
+        self.assertEqual(plugin, vitals.VERSION)
+        self.assertEqual(market, vitals.VERSION)
+
+    def test_command_frontmatter_parses(self):
+        """
+        A broken frontmatter block is dropped whole - description included - and the
+        command still loads, just anonymous. `argument-hint: [set|get|unset] ...` did
+        exactly that: `|` opens a YAML block scalar, so the flow sequence was invalid.
+        """
+        for f in sorted((self.ROOT / "commands").glob("*.md")):
+            text = f.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("---\n"), f.name)
+            block = text.split("---\n", 2)[1]
+            for line in block.splitlines():
+                if not line.startswith(("description:", "argument-hint:")):
+                    continue
+                value = line.split(":", 1)[1].strip()
+                if value.startswith("["):
+                    self.assertTrue(value.startswith('"') or value.endswith('"')
+                                    or ("|" not in value and '"' not in value),
+                                    "%s: unquoted flow sequence -> %s" % (f.name, line))
+
+
 # ── Settings ────────────────────────────────────────────────────────────────
 
 class TestSettings(unittest.TestCase):
