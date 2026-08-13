@@ -10,7 +10,7 @@
       "name": "session-vitals",
       "source": "./",
       "description": "Report how often a Claude Code session has been compacted, checkpoint what it concluded before compaction swallows it, and hand that to the next session.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "category": "workflow",
       "tags": [
         "session",
