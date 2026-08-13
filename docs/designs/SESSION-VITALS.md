@@ -151,6 +151,27 @@ Removal notes worth keeping:
   printed an argparse error. It is kept as a no-op. The same snapshot behavior that hides
   a newly installed hook also pins a removed one.
 
+## Session start is not the only moment hooks load
+
+Repeatedly assumed, twice written into the README, and wrong: that hook configuration is
+fixed for the life of a session. `/reload-plugins` re-reads active plugins and applies
+their hooks to the running session.
+
+Established by experiment rather than by reading. A hook was registered in `hooks.json`
+mid-session, writing the payload's `session_id` to a probe file. After
+`/reload-plugins` the very next Bash call wrote this session's own id, so the newly
+registered hook was live without a restart.
+
+The first attempt at the same experiment was invalid and is worth recording: it watched
+the `PreToolUse` heartbeat, which lives in a machine-global state file that any other
+running session also writes. The counter moved for reasons unrelated to this session.
+A shared counter cannot answer a per-session question.
+
+What remains true: a session started *before* the plugin existed runs none of its hooks
+until something reloads them, and nothing says so on its own. That is what `doctor`'s
+per-session check exists for, and it is the line to trust over any documented
+instruction.
+
 ## Runtime dependency
 
 The distribution check initially covered only marketplace and versioning, and **missed

@@ -34,8 +34,8 @@ Paste this and let Claude do all of it:
 
 > Install session-vitals: run `claude plugin marketplace add vickyhoo/session-vitals`
 > then `claude plugin install session-vitals@vickyhoo`. Confirm `python3 --version`
-> works, since that is the only dependency. Then tell me to restart this session, because
-> hooks are captured at session start and this one will not have them.
+> works, since that is the only dependency. Then tell me to run `/reload-plugins`
+> myself, since you cannot, and afterwards run `/session-vitals:doctor` and explain it.
 
 Or type it yourself. In Claude Code:
 
@@ -51,17 +51,20 @@ claude plugin marketplace add vickyhoo/session-vitals
 claude plugin install session-vitals@vickyhoo
 ```
 
-**Then restart the session.** Hook configuration is captured when a session starts, so
-the one you installed from runs none of it - no reporting, no checkpointing, and no
-error either. This is the single most common way to conclude the plugin does nothing.
-
-Once restarted:
+**Then run `/reload-plugins`.** Hook configuration is otherwise captured when a session
+starts, so the session you installed from runs none of it - no reporting, no
+checkpointing, and no error either. That is the single most common way to conclude the
+plugin does nothing.
 
 ```
+/reload-plugins
 /session-vitals:doctor
 ```
 
-It says explicitly whether the hooks are live in the session you are in.
+`/reload-plugins` applies the hooks to the running session; verified by registering a
+hook mid-session and watching it fire immediately afterwards. `doctor` then says
+explicitly whether they are live in the session you are in - trust that line over any
+instruction here, including this one.
 
 ## What it does
 
