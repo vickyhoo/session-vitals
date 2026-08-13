@@ -499,10 +499,15 @@ def grade(m):
 
 
 def advice(level):
+    """
+    The level already decides which of the two commands applies, so name that one rather
+    than offering both. A one-line alert is the wrong place to explain a choice, and
+    listing two commands makes the reader do work the grade has already done.
+    """
     if level == "crit":
-        return "checkpoint and start a fresh session: /session-vitals:retire"
+        return "save and continue in a fresh session: /session-vitals:retire"
     if level == "warn":
-        return "checkpoint your progress: /session-vitals:retire"
+        return "save a checkpoint, no need to stop: /session-vitals:checkpoint"
     return ""
 
 
@@ -786,6 +791,9 @@ def health_context(m, level, base, modifiers):
         "[session-vitals] Current session transcript: %s. "
         "%d lines of conversation have been condensed into roughly %d characters of summary.\n"
         "Suggested action: %s\n"
+        "If they ask what the difference is: /session-vitals:checkpoint saves what has "
+        "been concluded so far and the session continues; /session-vitals:retire does the "
+        "same write and then hands off to a fresh session.\n"
         "Mention this to the user in a sentence or two at the end of your reply. "
         "Do not interrupt what they are currently working on."
         % (detail, m["total_lines"], m["summarized_chars"], advice(level))
@@ -1127,7 +1135,7 @@ def cmd_status(args):
     if stale and r["level"] == "crit":
         todo.append("checkpoint and start a fresh session: /session-vitals:retire")
     elif stale:
-        todo.append("write a checkpoint: /session-vitals:retire")
+        todo.append("write a checkpoint: /session-vitals:checkpoint")
     elif r["level"] != "ok":
         todo.append(advice(r["level"]))
     print("\n%s\n" % ("\n".join("  -> " + t for t in todo) if todo

@@ -172,6 +172,23 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(self.g(9, rapid=5, format_suspect=True), "crit")
 
 
+class TestAdvice(unittest.TestCase):
+    """
+    Two commands now exist and the grade already decides which one applies. Naming both
+    in a one-line alert would push the choice back onto the reader.
+    """
+
+    def test_each_level_names_the_command_that_fits_it(self):
+        warn, crit = vitals.advice("warn"), vitals.advice("crit")
+        self.assertIn("/session-vitals:checkpoint", warn)   # keep working
+        self.assertNotIn("retire", warn)
+        self.assertIn("/session-vitals:retire", crit)       # hand off
+        self.assertNotIn("checkpoint", crit)
+
+    def test_healthy_says_nothing(self):
+        self.assertEqual(vitals.advice("ok"), "")
+
+
 class TestPending(unittest.TestCase):
 
     def test_precompact_counts_the_pending_one(self):

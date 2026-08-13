@@ -75,8 +75,12 @@ conversation has been summarized away.
 | Compactions | Behavior |
 |---|---|
 | 0-2 | Completely silent |
-| 3-5 | Suggests a checkpoint |
-| 6+ | Suggests starting a fresh session |
+| 3-5 | Points at `/session-vitals:checkpoint` - save, keep working |
+| 6+ | Points at `/session-vitals:retire` - save, then continue in a fresh session |
+
+The grade decides which of the two commands applies, so the alert names one rather than
+offering both. `checkpoint` writes what has been concluded and the session continues;
+`retire` does the same write and then hands off.
 
 Two signals each escalate one level: a gap under 512KB between compactions, and no
 compaction markers found at all in a large transcript, which means Claude Code's format
@@ -339,7 +343,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-77 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+79 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License
