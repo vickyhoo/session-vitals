@@ -110,32 +110,44 @@ writes. `doctor` now prints which file runs and flags a differing registered cop
 
 ---
 
-## Releasing
+## Branching and releasing
 
-Distribution is decided by one string. `claude plugin update` compares the `version` in
-`.claude-plugin/plugin.json` on the default branch and nothing else - the docs are
-explicit: "the plugin is pinned to this string and users only receive updates when it
-changes." Demonstrated on this machine: with the version left at 1.0.0, `update` answered
-"already at the latest version" for a copy seven commits behind.
+Work happens on `dev`. A release is a merge to `main` that carries a version bump, then
+a tag. That one flow serves both distribution paths, because of how the version resolves:
 
-So the release checklist is short, and every item exists because something failed:
+```
+1. version in plugin.json      <- wins
+2. version in the marketplace entry
+3. the source's git commit SHA
+```
 
-1. **Bump the version.** In `plugin.json`, `marketplace.json`, and `vitals.py`. A test
-   asserts all three agree; hand-syncing three copies is a matter of time.
-2. **`claude plugin validate .`** It parses every command's frontmatter. A malformed
-   block is dropped whole - `description` included - and the command still loads,
-   anonymous. `argument-hint: [set|get|unset]` did that: `|` opens a YAML block scalar.
-   A test now guards the same shape, but validate sees things the test does not.
-3. **Push to `main`.** The marketplace source is this repo's default branch and the
-   plugin source is `"./"`, so main *is* the release line.
-4. **`claude plugin tag --push`** to mark it. The tag also cross-checks that
-   `plugin.json` and the marketplace entry agree before it will run.
+- **Own marketplace** (`vickyhoo`): the marketplace source is this repo's default branch
+  and the plugin source is `"./"`, so `main` is the release line and the version gates
+  what users receive.
+- **Community marketplace**, if the plugin is ever accepted: entries pin a `sha` and CI
+  moves the pin as commits land. An explicit `version` outranks that pin, so users still
+  update on the bump rather than on every push. Not a conflict here, since every merge to
+  main carries one - but it is why none of the 2281 plugins in the community catalog
+  declares a version. Declaring one turns off the automatic pin-following, which is the
+  behavior we want and they do not.
 
-A `dev` branch is optional and does not address the failure that actually occurred, which
-was forgetting to bump rather than releasing too eagerly. If main should be free to move
-without shipping, the structural change is to give the plugin entry an explicit `github`
-source with `ref` or `sha` pointing at a tag, instead of `"./"`; then main and the release
-line separate properly. Not worth it for a single-maintainer repo.
+The catalog also records a `ref` per entry: 364 track `main`, 16 `master`, one `develop`,
+one a tag. So a submission can follow whichever branch is the release line.
+
+Release steps, each present because something failed:
+
+1. **Merge `dev` into `main` with the version bumped** in `plugin.json`,
+   `marketplace.json`, and `vitals.py`. A test asserts the three agree.
+2. **`claude plugin validate --strict .`** The review pipeline runs the same check. It is
+   what caught `argument-hint: [set|get|unset]`, which is invalid YAML - `|` opens a block
+   scalar - and silently dropped the whole frontmatter, `description` included.
+3. **`claude plugin tag --push`**. This is the guard against the failure that started all
+   of it: forgetting to bump. The tag already exists, so it refuses and says so. It also
+   cross-checks `plugin.json` against the marketplace entry.
+
+Forgetting the bump is the only failure that has actually happened: `plugin update`
+answered "already at the latest version (1.0.0)" for a copy seven commits behind. Step 3
+now catches it before it ships.
 
 ---
 
