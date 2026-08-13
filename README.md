@@ -198,7 +198,14 @@ Arguments steer what gets emphasized, the way `/compact <instructions>` steers a
 
 ```
 /session-vitals:checkpoint the deploy pipeline decisions and why the mirror did not fix it
+/session-vitals:retire     why we abandoned the mirror fix
 ```
+
+They are read differently on purpose. For `checkpoint` the argument leads and the rest
+is covered briefly - a narrow checkpoint costs little, because you can run another in
+ten minutes. For `retire` it is captured *in addition to* everything else and never
+narrows the write: it is the last one before the session ends, and whatever it leaves
+out, nobody is left to add.
 
 Each block records the session that wrote it, on a visible line rather than only inside
 the HTML marker:

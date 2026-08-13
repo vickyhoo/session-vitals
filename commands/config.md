@@ -1,8 +1,12 @@
 ---
 description: Show or change session-vitals settings
+argument-hint: [set|get|unset] [key] [value]
 ---
 
-With no arguments, show everything:
+$ARGUMENTS
+
+If arguments were passed above, run them through the command directly rather than
+asking the user to restate them. With no arguments, show everything:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/vitals.py" config
