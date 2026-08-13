@@ -1296,6 +1296,13 @@ def cmd_update_check(args):
         print("UNKNOWN %s (could not reach %s)" % (local, UPDATE_REPO))
 
 
+def _digest(path):
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _installed_copies():
     """Where Claude Code believes this plugin lives, per its own install record."""
     found = []
@@ -1337,9 +1344,14 @@ def cmd_doctor(args):
     me = Path(__file__).resolve()
     print("[%s] Running %s" % (ok, me))
     for other in _installed_copies():
-        if other != me and other.is_file():
-            print("[%s] A different copy is registered as installed: %s. If it is stale, "
-                  "the behavior you see may not match the code you edited." % (warn, other))
+        # Compare contents, not paths. A byte-identical copy at a second location is
+        # normal for a directory-source install and worth nothing to report; a copy that
+        # has drifted is the one that sends someone debugging code that never ran.
+        if other == me or not other.is_file():
+            continue
+        if _digest(other) != _digest(me):
+            print("[%s] The registered install is a different version: %s. The behavior "
+                  "you see comes from the file above, not that one." % (warn, other))
 
     # 3. Platform capability
     if notifications_available():
