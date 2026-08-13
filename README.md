@@ -30,17 +30,32 @@ supported.
 
 ## Install
 
+**Type these yourself.** `/plugin` is a built-in Claude Code command, not something the
+model can invoke, and writing the config files by hand does not work either - verified:
+Claude Code will not recognize a plugin registered that way.
+
 ```bash
 /plugin marketplace add vickyhoo/session-vitals
 /plugin install session-vitals@vickyhoo
 /reload-plugins
 ```
 
-Run the self check right away:
+Then paste this and let Claude do the rest:
+
+> Set up session-vitals for me. Run `/session-vitals:doctor` and tell me what it found in
+> plain language. Confirm python3 is present, since that is the plugin's only dependency.
+> Then explain what is now wired and what stays off until I ask for it, and offer to turn
+> on checkpointing if it makes sense for the project I am in.
+
+Or just run the self check on its own:
 
 ```
 /session-vitals:doctor
 ```
+
+Hooks are captured when a session starts, so **the session you install from is not
+covered**. Restart it, or start a new one, before expecting anything automatic. `doctor`
+says so explicitly when it happens.
 
 ## What it does
 
