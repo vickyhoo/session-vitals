@@ -194,6 +194,28 @@ block rather than appending, so running it whenever a decision settles is the in
 use, not just at the end. `/session-vitals:retire` is the same write plus the handoff
 steps for starting a fresh session.
 
+Arguments steer what gets emphasized, the way `/compact <instructions>` steers a summary:
+
+```
+/session-vitals:checkpoint the deploy pipeline decisions and why the mirror did not fix it
+```
+
+Each block records the session that wrote it, on a visible line rather than only inside
+the HTML marker:
+
+```
+_updated 2026-08-13T04:09:36+00:00 · session `4ea67777-...` (transcript is pruned after
+`cleanupPeriodDays`, 30 by default)_
+```
+
+**The expiry is stated because the pointer really does expire.** Claude Code deletes
+transcripts after `cleanupPeriodDays`, 30 by default. Measured on the machine this was
+built on, against the `originSessionId` that Claude's own auto memory records: of 67
+pointers, 45% no longer resolved, and among files older than 60 days it was 85%. So the
+id is a lead worth following while it lasts, not a promise - which is the reason a
+checkpoint has to carry the conclusion itself rather than a reference to where the
+conclusion was reached.
+
 Writes go through a command rather than the model's Write tool, so the safeguards
 actually apply:
 
@@ -348,7 +370,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-79 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+81 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

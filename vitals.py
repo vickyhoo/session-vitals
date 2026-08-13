@@ -721,6 +721,35 @@ def resolve_project_dir(start):
     return None, "no git repository found above %s; pass --dir explicitly" % p
 
 
+def block_key(session_id):
+    """
+    The identifier a session's block is filed under.
+
+    Full length now; it used to be cut to 32 characters, which truncated a 36-character
+    UUID and left the file pointing at something that was not quite the session id.
+    """
+    return re.sub(r"[^A-Za-z0-9_\-]", "", session_id or "")[:64] or "unknown"
+
+
+def _find_block(text, sid):
+    """
+    Span of this session's block, or None.
+
+    Also matches the 32-character key written by earlier versions. Without that, the
+    first write after upgrading would not recognize a session's own block and would
+    append a second one beside it, which is exactly the duplication the per-session
+    format exists to prevent.
+    """
+    for key in (sid, sid[:32]):
+        begin = "<!-- session-vitals:%s -->" % key
+        end = "<!-- /session-vitals:%s -->" % key
+        i = text.find(begin)
+        j = text.find(end)
+        if i != -1 and j > i:
+            return i, j + len(end) + (1 if text[j + len(end):j + len(end) + 1] == "\n" else 0)
+    return None
+
+
 def write_progress(cwd, session_id, body, cfg):
     """
     Write into a per-session block so concurrent sessions never clobber each other.
@@ -736,17 +765,23 @@ def write_progress(cwd, session_id, body, cfg):
 
     max_bytes = int(opts.get("max_bytes", 120_000))
     target = Path(cwd) / opts.get("filename", "PROGRESS.md")
-    sid = re.sub(r"[^A-Za-z0-9_\-]", "", session_id)[:32] or "unknown"
+    sid = block_key(session_id)
     begin, end = "<!-- session-vitals:%s -->" % sid, "<!-- /session-vitals:%s -->" % sid
-    block = "%s\n_updated %s_\n\n%s\n%s\n" % (begin, _now(), body.rstrip(), end)
+    # The id goes on a visible line too, not only into the HTML comment, so a reader can
+    # trace a block back to the conversation that produced it. Stated with its own expiry:
+    # Claude Code prunes transcripts after cleanupPeriodDays (30 by default), and on this
+    # machine 85% of pointers older than 60 days no longer resolved. A pointer that
+    # silently stops working invites confident answers about a file that is not there.
+    block = ("%s\n_updated %s · session `%s` (transcript is pruned after "
+             "`cleanupPeriodDays`, 30 by default)_\n\n%s\n%s\n"
+             % (begin, _now(), sid, body.rstrip(), end))
 
     try:
         with _locked(target) as f:
             old = f.read()
-            if begin in old and end in old:
-                head, rest = old.split(begin, 1)
-                _, tail = rest.split(end, 1)
-                new = head + block + tail
+            span = _find_block(old, sid)
+            if span:
+                new = old[:span[0]] + block + old[span[1]:]
             else:
                 header = "" if old.strip() else "# Project progress\n\n_Maintained by session-vitals, one block per session._\n\n"
                 new = (old.rstrip() + "\n\n" if old.strip() else header) + block
@@ -1059,8 +1094,7 @@ def session_report(transcript, sid):
                 text = ""
             checkpoint["path"] = str(f)
             checkpoint["blocks"] = text.count("<!-- session-vitals:")
-            key = re.sub(r"[^A-Za-z0-9_\-]", "", sid or "")[:32]
-            checkpoint["mine"] = bool(key) and ("session-vitals:%s " % key) in text
+            checkpoint["mine"] = _find_block(text, block_key(sid)) is not None
 
     return {"metrics": m, "level": level, "base": base, "modifiers": mods,
             "checkpoint": checkpoint,
@@ -1539,9 +1573,8 @@ def cmd_checkpoint(args):
 
     fname = opts.get("filename", "PROGRESS.md")
     f = target / fname
-    key = re.sub(r"[^A-Za-z0-9_\-]", "", sid)[:32]
-    existing = f.is_file() and ("session-vitals:%s " % key) in f.read_text(
-        encoding="utf-8", errors="replace")
+    existing = f.is_file() and _find_block(
+        f.read_text(encoding="utf-8", errors="replace"), block_key(sid)) is not None
     print("\n%s %s" % ("Replacing this session's block in" if existing
                        else "Adding this session's block to", f))
     print("\nPipe the text into:\n\n  %s\n" % cmd)

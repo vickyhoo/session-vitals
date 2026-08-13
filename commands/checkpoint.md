@@ -1,6 +1,9 @@
 ---
 description: Save what this session has concluded into the project's PROGRESS.md, without ending the session
+argument-hint: [what to emphasize, e.g. "the deploy pipeline decisions"]
 ---
+
+$ARGUMENTS
 
 Run:
 
@@ -11,6 +14,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/vitals.py" checkpoint
 If it cannot tell which project this session belongs to, re-run it with the directory
 you are actually working in. Do not guess from the shell's location - that follows the
 last command you ran, not the project.
+
+If anything was passed above, treat it as **what the user wants emphasized** - the same
+way `/compact <instructions>` steers a summary. Lead with it and give it the most detail.
+Still cover the rest below, more briefly: a checkpoint narrowed to one topic strands
+every decision it left out. If the argument looks like `--dir <path>` instead, that is
+the project directory - pass it through to the command rather than treating it as a
+topic.
 
 Then write your current understanding and pipe it into the command it printed. Cover:
 

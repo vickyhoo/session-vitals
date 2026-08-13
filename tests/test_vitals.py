@@ -254,6 +254,40 @@ class TestProgress(unittest.TestCase):
         self.assertNotIn("first draft from A", text)  # A replaced only its own block
         self.assertEqual(text.count("session-vitals:sessA"), 2)  # begin and end markers
 
+    def test_full_session_id_is_recorded(self):
+        """
+        A UUID is 36 characters and the key used to be cut to 32, so the file recorded
+        something that was not quite the session id. It is also written on a visible
+        line, with its own expiry: transcripts are pruned after cleanupPeriodDays.
+        """
+        sid = "4ea67777-a62a-4c2b-b5ad-a76fab364195"
+        with tempfile.TemporaryDirectory() as d:
+            vitals.write_progress(d, sid, "notes", self.CFG)
+            text = (Path(d) / "PROGRESS.md").read_text(encoding="utf-8")
+        self.assertIn("<!-- session-vitals:%s -->" % sid, text)
+        visible = [ln for ln in text.splitlines()
+                   if sid in ln and not ln.lstrip().startswith("<!--")]
+        self.assertTrue(visible, "the id appears only inside an HTML comment")
+        self.assertIn("cleanupPeriodDays", visible[0])  # dated, not promised forever
+
+    def test_a_block_written_by_the_old_key_is_replaced_not_duplicated(self):
+        """
+        Blocks written before the key widened are keyed on the 32-character truncation.
+        Failing to match them would append a second block for the same session - the
+        exact duplication the per-session format exists to prevent.
+        """
+        sid = "4ea67777-a62a-4c2b-b5ad-a76fab364195"
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "PROGRESS.md"
+            f.write_text("# Project progress\n\n<!-- session-vitals:%s -->\n_updated old_\n"
+                         "\nstale\n<!-- /session-vitals:%s -->\n" % (sid[:32], sid[:32]),
+                         encoding="utf-8")
+            vitals.write_progress(d, sid, "fresh", self.CFG)
+            text = f.read_text(encoding="utf-8")
+        self.assertEqual(text.count("<!-- session-vitals:"), 1)
+        self.assertIn("fresh", text)
+        self.assertNotIn("stale", text)
+
     def test_size_limit(self):
         cfg = {"progress_md": {"enabled": True, "max_bytes": 200,
                                "filename": "PROGRESS.md"}}
