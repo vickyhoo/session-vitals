@@ -459,20 +459,17 @@ class TestHookOutput(unittest.TestCase):
                                "filename": "PROGRESS.md"}}
 
     def run_hook(self, fn, payload, cfg=None):
-        saved = (vitals.load_config, vitals.notify, vitals.beat,
-                 vitals.spawn_update_refresh)
+        saved = (vitals.load_config, vitals.notify, vitals.beat)
         buf = io.StringIO()
         try:
             if cfg is not None:
                 vitals.load_config = lambda: cfg
             vitals.notify = lambda *a, **k: None   # no desktop popups during tests
             vitals.beat = lambda *a, **k: None     # never touch the real state file
-            vitals.spawn_update_refresh = lambda: None   # no background network calls
             with redirect_stdout(buf):
                 fn(payload)
         finally:
-            (vitals.load_config, vitals.notify, vitals.beat,
-             vitals.spawn_update_refresh) = saved
+            vitals.load_config, vitals.notify, vitals.beat = saved
         text = buf.getvalue()
         return json.loads(text) if text.strip() else None
 
@@ -614,6 +611,43 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(len(self.state()["sessions"]), vitals.SESSION_MEMORY)
 
 
+# ── Smoke ───────────────────────────────────────────────────────────────────
+
+class TestSubcommandsRun(unittest.TestCase):
+    """
+    Every subcommand, actually invoked. Removing the update-checking code took a helper
+    that only `doctor` used with it; 71 unit tests still passed and `doctor` raised
+    NameError on the first real run. Nothing here asserts on the wording - the point is
+    that each entry point executes at all.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def run_cmd(self, *args):
+        import subprocess
+        return subprocess.run([sys.executable, str(self.ROOT / "vitals.py")] + list(args),
+                              capture_output=True, timeout=60)
+
+    def test_every_subcommand_exits_cleanly(self):
+        for args in (["status"], ["scan"], ["doctor"], ["retire"], ["checkpoint"],
+                     ["config"], ["config", "get", "progress_md.enabled"]):
+            r = self.run_cmd(*args)
+            self.assertEqual(r.returncode, 0,
+                             "%s failed:\n%s" % (args, r.stderr.decode("utf-8", "replace")))
+            self.assertNotIn(b"Traceback", r.stderr)
+
+    def test_hook_events_accept_a_payload(self):
+        for event in ("precompact", "postcompact", "sessionstart", "pretooluse"):
+            import subprocess
+            r = subprocess.run(
+                [sys.executable, str(self.ROOT / "vitals.py"), "hook", event],
+                input=json.dumps({"session_id": "smoke", "source": "startup",
+                                  "transcript_path": "/nonexistent"}).encode(),
+                capture_output=True, timeout=60)
+            self.assertEqual(r.returncode, 0, event)
+            self.assertNotIn(b"Traceback", r.stderr)
+
+
 # ── Release consistency ─────────────────────────────────────────────────────
 
 class TestManifests(unittest.TestCase):
@@ -682,12 +716,12 @@ class TestSettings(unittest.TestCase):
             self.assertEqual(got, default, dotted)
 
     def test_unknown_keys_are_reported(self):
-        bad = vitals.unknown_keys({"progress_md": {"enabld": True}, "updat_check": False})
-        self.assertEqual(bad, ["progress_md.enabld", "updat_check"])
+        bad = vitals.unknown_keys({"progress_md": {"enabld": True}, "nonsense": False})
+        self.assertEqual(bad, ["nonsense", "progress_md.enabld"])
 
     def test_known_keys_are_not_reported(self):
         self.assertEqual(vitals.unknown_keys(
-            {"progress_md": {"enabled": True}, "update_check": False}), [])
+            {"progress_md": {"enabled": True, "inject": False}}), [])
 
     def test_values_are_coerced_to_the_declared_type(self):
         self.assertEqual(vitals._coerce("progress_md.enabled", "yes"), (True, None))
@@ -877,110 +911,6 @@ class TestProgressPointer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = self.project(d, "<!-- session-vitals:s1 -->\nnotes\n")
             self.assertIsNone(self.run_it({"source": "startup", "cwd": str(root)}, cfg))
-
-
-# ── Update checking ─────────────────────────────────────────────────────────
-
-class TestUpdateCheck(unittest.TestCase):
-    """
-    The plugin manager cannot be trusted to notice a release: the install path is
-    version-namespaced and the version string is pinned by hand. So the check is done
-    here, following gstack's design - including the parts that exist because a naive
-    version compare misfires.
-    """
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        d = Path(self.tmp.name)
-        self.saved = (vitals.STATE_DIR, vitals.UPDATE_CACHE_PATH, vitals.SNOOZE_PATH,
-                      vitals._fetch_remote_version, vitals.VERSION,
-                      vitals.spawn_update_refresh)
-        vitals.spawn_update_refresh = lambda: None   # no real subprocesses in tests
-        vitals.STATE_DIR = d
-        vitals.UPDATE_CACHE_PATH = d / "last-update-check"
-        vitals.SNOOZE_PATH = d / "update-snoozed"
-        self.calls = []
-        vitals.VERSION = "1.2.0"
-
-    def tearDown(self):
-        (vitals.STATE_DIR, vitals.UPDATE_CACHE_PATH, vitals.SNOOZE_PATH,
-         vitals._fetch_remote_version, vitals.VERSION,
-         vitals.spawn_update_refresh) = self.saved
-        self.tmp.cleanup()
-
-    def remote(self, value):
-        def fake():
-            self.calls.append(value)
-            return value
-        vitals._fetch_remote_version = fake
-
-    def test_newer_remote_is_an_upgrade(self):
-        self.remote("1.3.0")
-        self.assertEqual(vitals.check_update({})[0], "upgrade")
-
-    def test_older_remote_is_not(self):
-        """
-        A stale CDN, or a local checkout running ahead of the branch, would otherwise
-        produce a backwards "upgrade available" pointing at the version already replaced.
-        """
-        self.remote("1.1.9")
-        self.assertEqual(vitals.check_update({})[0], "current")
-
-    def test_version_ordering_is_numeric_not_lexical(self):
-        self.assertGreater(vitals._vtuple("1.10.0"), vitals._vtuple("1.9.0"))
-        self.assertGreater(vitals._vtuple("2.0"), vitals._vtuple("1.999.999"))
-
-    def test_unreachable_source_reports_current(self):
-        """Silence on failure. A version check must never be why a session feels broken."""
-        vitals._fetch_remote_version = lambda: None
-        state, local, remote = vitals.check_update({})
-        self.assertEqual(state, "current")
-        self.assertIsNone(remote)
-
-    def test_fresh_cache_skips_the_network(self):
-        self.remote("1.3.0")
-        vitals.check_update({})
-        vitals.check_update({})
-        self.assertEqual(len(self.calls), 1)
-
-    def test_offline_mode_never_fetches(self):
-        """The hooks read the cache only; session start must not wait on the network."""
-        self.remote("1.3.0")
-        vitals.check_update({}, network=False)
-        self.assertEqual(self.calls, [])
-
-    def test_disabled_in_config(self):
-        self.remote("1.3.0")
-        self.assertEqual(vitals.check_update({"update_check": False})[0], "unknown")
-        self.assertEqual(self.calls, [])
-
-    def test_snooze_escalates_then_caps(self):
-        self.assertEqual(vitals.snooze("1.3.0"), 24 * 3600)
-        self.assertEqual(vitals.snooze("1.3.0"), 48 * 3600)
-        self.assertEqual(vitals.snooze("1.3.0"), 7 * 24 * 3600)
-        self.assertEqual(vitals.snooze("1.3.0"), 7 * 24 * 3600)   # capped
-        self.assertTrue(vitals.is_snoozed("1.3.0"))
-
-    def test_a_new_version_resets_the_snooze(self):
-        """Declining 1.3.0 is not declining 1.4.0."""
-        vitals.snooze("1.3.0")
-        self.assertTrue(vitals.is_snoozed("1.3.0"))
-        self.assertFalse(vitals.is_snoozed("1.4.0"))
-        self.assertEqual(vitals.snooze("1.4.0"), 24 * 3600)
-
-    def test_expired_snooze_speaks_again(self):
-        vitals.SNOOZE_PATH.write_text("1.3.0 1 0", encoding="utf-8")   # epoch 0
-        self.assertFalse(vitals.is_snoozed("1.3.0"))
-
-    def test_corrupt_snooze_file_is_ignored(self):
-        vitals.SNOOZE_PATH.write_text("garbage", encoding="utf-8")
-        self.assertFalse(vitals.is_snoozed("1.3.0"))
-
-    def test_notice_is_silent_while_snoozed(self):
-        self.remote("1.3.0")
-        vitals.check_update({})
-        vitals.snooze("1.3.0")
-        self.assertIsNone(vitals.update_notice({}))
 
 
 # ── Platform capability ─────────────────────────────────────────────────────

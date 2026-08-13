@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.8 is the floor the README promises; 3.13 is what people actually have.
+        # The plugin runs on whatever python3 a user's machine happens to provide,
+        # so testing one version would only prove it works on that one.
+        python: ["3.8", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests
+        # No install step: the project's only dependency is Python itself, and a
+        # requirements file here would quietly let that stop being true.
+        run: python3 -m unittest discover -s tests -v
+      - name: Manifests parse
+        run: |
+          python3 -c "import json; [json.load(open(f)) for f in (
+            '.claude-plugin/plugin.json',
+            '.claude-plugin/marketplace.json',
+            'hooks/hooks.json')]"

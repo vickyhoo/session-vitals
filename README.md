@@ -68,6 +68,24 @@ hook mid-session and watching it fire immediately afterwards. `doctor` then says
 explicitly whether they are live in the session you are in - trust that line over any
 instruction here, including this one.
 
+### Staying up to date
+
+**Turn on auto-update for the marketplace**, because it is off by default for
+third-party ones:
+
+`/plugin` → **Marketplaces** → *vickyhoo* → **Enable auto-update**
+
+Claude Code then refreshes shortly after each session starts and tells you to run
+`/reload-plugins` when something changed. Without it, update manually:
+
+```
+/plugin update session-vitals@vickyhoo
+```
+
+This plugin deliberately does not check for its own updates. It used to, and that was a
+weaker copy of a mechanism the platform already has - the platform installs the update,
+a self-check can only mention it.
+
 ## What it does
 
 ### 1. Compaction reporting
@@ -256,40 +274,6 @@ than asking the model to name one it could only guess at. The script path is spe
 in full for the same reason: `$CLAUDE_PLUGIN_ROOT` is exported to hook processes only, so
 a prompt carrying that variable expands to nothing when the model runs it through Bash.
 
-### 3. Update checking
-
-The plugin asks its own source repository whether a newer version exists, rather than
-waiting for the plugin manager to notice. It has to: the install path is
-version-namespaced and `plugin.json` pins the version by hand, so nothing guarantees a
-push is ever fetched. A stale copy that silently keeps running is the same class of
-failure as a silent hook.
-
-Most of the design exists because the obvious version compare misfires:
-
-| Detail | Why |
-|---|---|
-| Version read through a commit-pinned raw URL, resolved with `git ls-remote` | GitHub's branch raw CDN can serve stale content for minutes after a push, so a check run right after a release reports "up to date" and the release goes unnoticed |
-| Only a **strictly higher** remote counts | A stale CDN, or a local checkout ahead of the branch, otherwise produces a backwards "upgrade available" |
-| Response must match a version shape | An error page must not become "upgrade to `<!DOCTYPE html>`" |
-| Cache TTL of 1h when current, 12h when an update waits | Catch a release quickly; do not nag every session once you know |
-| Snooze escalates 24h, 48h, 1 week, keyed by version | A declined update should not become a daily tax, but a *new* release has not been declined |
-| Every failure is silence | A version check must never be why a session feels slow or broken |
-
-Hooks only ever read the cache; the network request happens in a detached background
-process, so session start never waits on it.
-
-```bash
-python3 vitals.py update-check            # UP_TO_DATE / UPGRADE_AVAILABLE / UNKNOWN
-python3 vitals.py update-check --force    # ignore cache and snooze
-python3 vitals.py update-check --snooze   # remind me later
-```
-
-Turn it off, and the plugin makes no network requests whatsoever:
-
-```bash
-/session-vitals:config set update_check false
-```
-
 ## Commands
 
 | Command | Purpose |
@@ -301,7 +285,6 @@ Turn it off, and the plugin makes no network requests whatsoever:
 | `/session-vitals:checkpoint` | Save what this session concluded into `PROGRESS.md`, without ending it |
 | `/session-vitals:retire` | Print a ready-to-run checkpoint command and the handoff steps |
 | `vitals.py write-progress` | Write this session's progress block (what the post-compaction prompt asks for) |
-| `vitals.py update-check` | Compare the installed version against the source repository |
 
 ### Why doctor exists
 
@@ -326,10 +309,8 @@ to pick the plugin up.**
 - **Touch transcript files.** Read only. `retire` only assembles and advises; it never
   moves or deletes anything, because the running process is still writing that file.
   Clean up disk space manually once a session is actually closed.
-- **Send anything anywhere.** Nothing about your sessions, projects or conversations
-  leaves the machine. The one exception is the update check above, which is an outbound
-  request to GitHub carrying no payload; turn it off and there is no network traffic at
-  all.
+- **Send anything anywhere.** No network requests at all. Nothing about your sessions,
+  projects or conversations leaves the machine.
 - **Store conversation content.** Only compaction counts, byte offsets and heartbeat
   timestamps.
 - **Gate dangerous commands.** It used to, with a regex list and a confirmation dialog.
@@ -377,7 +358,7 @@ tool that can produce that shape can plug in.
 python3 -m unittest discover -s tests -v
 ```
 
-81 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
+73 tests, nothing to install. Every fixture is synthetic. Real transcripts contain full
 conversations and project paths, so they never enter the repository.
 
 ## License

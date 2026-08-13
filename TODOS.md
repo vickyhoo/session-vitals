@@ -84,29 +84,24 @@ Reopen only if someone actually complains.
 
 ---
 
-## Resolved: does a git-source install ever pick up changes
+## Removed 2026-08-13: the self-hosted update check
 
-**Answered by not depending on it.** The plugin now asks its own source repository for the
-declared version and tells the user (README section 4; the approach is gstack's, and the
-reasoning behind each guard is in the `vitals.py` comments rather than the README).
-Whether `/plugin update` fetches anything while the version string stays put no longer
-determines whether a stale install goes unnoticed - which was the actual risk.
+The plugin used to ask its own repository whether a newer version existed. Removed for
+the same reason the dangerous-command gate was: it duplicated a platform mechanism and
+did it worse. Claude Code's marketplace auto-update *installs* the new version; a
+self-check can only mention one.
 
-Two consequences worth keeping in mind:
+It was also unreliable on the path it would matter most. Community-marketplace entries
+pin a commit SHA and CI moves the pin as commits land, while the check compared the
+`version` string in `plugin.json` - so a user parked on an older SHA with the version
+unchanged would have been told they were up to date.
 
-- **The version has to move on every release.** The check compares version strings, so a
-  push without a bump is invisible to it. This does not conflict with D5, which was about
-  the opposite failure: omitting `version` makes the commit SHA the version and every push
-  looks like an update. Explicit version plus an owned check means releases are deliberate.
-- **Still untested end to end**, because nothing is published yet. The check currently
-  reports `UNKNOWN` and stays silent, which is the designed behavior for an unreachable
-  source. Confirm against a real repository once it exists.
+The catch, and why the README now says so explicitly: auto-update is **enabled by default
+only for official Anthropic marketplaces**. Third-party ones, including this one, default
+to off, so users are told to turn it on once.
 
-The original finding, kept for context: `installed_plugins.json` pointed at a frozen copy
-under `~/.claude/plugins/cache/vickyhoo/session-vitals/1.0.0/`, three days stale and
-missing every fix. It was not the code running - the directory-source marketplace serves
-the working tree live, proved by `state.json` recording session ids that only newer code
-writes. `doctor` now prints which file runs and flags a differing registered copy.
+Removing it also restored a claim the README had to walk back when the check was added:
+the plugin now makes no network requests at all.
 
 ---
 

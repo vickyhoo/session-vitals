@@ -1,0 +1,66 @@
+name: Release
+
+# Manual, because the version number is a judgment call. Auto-bumping a patch on every
+# merge would make MINOR and MAJOR meaningless, and this plugin has shipped both a
+# feature addition and a feature removal in one week.
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "patch, minor, major, or an explicit X.Y.Z"
+        required: true
+        default: patch
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0        # tags, so the guard below can see them
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Tests
+        run: python3 -m unittest discover -s tests
+
+      - name: Bump
+        id: bump
+        run: echo "version=$(python3 scripts/bump-version.py '${{ inputs.level }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Tests again, at the new version
+        # The suite asserts the three declared versions agree. Running it after the bump
+        # is what proves the bump touched all three rather than two.
+        run: python3 -m unittest discover -s tests
+
+      - name: Refuse to reuse a tag
+        # The failure this whole process exists to prevent: shipping without moving the
+        # version. `plugin update` compares that string and nothing else, so a repeat
+        # release is invisible to every user.
+        run: |
+          tag="session-vitals--v${{ steps.bump.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists - the version did not move"
+            exit 1
+          fi
+
+      - name: Commit and tag
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin vitals.py
+          git commit -m "Release $version"
+          git tag -a "session-vitals--v$version" -m "session-vitals $version"
+          git push origin main --follow-tags
+
+      - name: Summary
+        run: |
+          echo "Released **${{ steps.bump.outputs.version }}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Users receive it on their next \`/plugin update\`, or automatically if they" >> "$GITHUB_STEP_SUMMARY"
+          echo "enabled auto-update for the marketplace - off by default for third-party ones." >> "$GITHUB_STEP_SUMMARY"
