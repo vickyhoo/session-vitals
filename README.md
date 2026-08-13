@@ -30,32 +30,38 @@ supported.
 
 ## Install
 
-**Type these yourself.** `/plugin` is a built-in Claude Code command, not something the
-model can invoke, and writing the config files by hand does not work either - verified:
-Claude Code will not recognize a plugin registered that way.
+Paste this and let Claude do all of it:
 
-```bash
+> Install session-vitals: run `claude plugin marketplace add vickyhoo/session-vitals`
+> then `claude plugin install session-vitals@vickyhoo`. Confirm `python3 --version`
+> works, since that is the only dependency. Then tell me to restart this session, because
+> hooks are captured at session start and this one will not have them.
+
+Or type it yourself. In Claude Code:
+
+```
 /plugin marketplace add vickyhoo/session-vitals
 /plugin install session-vitals@vickyhoo
-/reload-plugins
 ```
 
-Then paste this and let Claude do the rest:
+Or in a terminal, which is the same thing without the prompt:
 
-> Set up session-vitals for me. Run `/session-vitals:doctor` and tell me what it found in
-> plain language. Confirm python3 is present, since that is the plugin's only dependency.
-> Then explain what is now wired and what stays off until I ask for it, and offer to turn
-> on checkpointing if it makes sense for the project I am in.
+```bash
+claude plugin marketplace add vickyhoo/session-vitals
+claude plugin install session-vitals@vickyhoo
+```
 
-Or just run the self check on its own:
+**Then restart the session.** Hook configuration is captured when a session starts, so
+the one you installed from runs none of it - no reporting, no checkpointing, and no
+error either. This is the single most common way to conclude the plugin does nothing.
+
+Once restarted:
 
 ```
 /session-vitals:doctor
 ```
 
-Hooks are captured when a session starts, so **the session you install from is not
-covered**. Restart it, or start a new one, before expecting anything automatic. `doctor`
-says so explicitly when it happens.
+It says explicitly whether the hooks are live in the session you are in.
 
 ## What it does
 
