@@ -32,10 +32,12 @@ supported.
 
 Paste this and let Claude do all of it:
 
-> Install session-vitals: run `claude plugin marketplace add vickyhoo/session-vitals`
-> then `claude plugin install session-vitals@vickyhoo`. Confirm `python3 --version`
-> works, since that is the only dependency. Then tell me to run `/reload-plugins`
-> myself, since you cannot, and afterwards run `/session-vitals:doctor` and explain it.
+```text
+Install session-vitals: run `claude plugin marketplace add vickyhoo/session-vitals`
+then `claude plugin install session-vitals@vickyhoo`. Confirm `python3 --version` works,
+since that is the only dependency. Then tell me to run /reload-plugins myself, since you
+cannot, and afterwards run /session-vitals:doctor and explain what it found.
+```
 
 Or type it yourself. In Claude Code:
 
